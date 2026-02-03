@@ -1,0 +1,5 @@
+duckdb
+polars
+xbbg
+office365-rest-python-client
+quantlib-python

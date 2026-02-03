@@ -57,3 +57,35 @@ Output a structured Markdown log summarizing the session:
 
 ---
 *End of Instructions. Treat this file as the immutable kernel of your operating logic.*
+
+## The Portfolio Constitution (Institutional Constraints)
+> "We are a Carrier, not a Trader. We harvest the spread between Asset Yield and Fixed FTP."
+
+* **ACCOUNTING REGIME (The Iron Law)**:
+    * **Structure**: 80%+ **AC (Amortized Cost)** & **FVOCI**. Small pocket of **FVTPL**.
+    * **P&L Logic**: 
+        * For **AC/FVOCI**: The primary KPI is **NII (Net Interest Income)**. 
+        * *Rule*: `PnL = (Book_Yield - Fixed_FTP) * Amortized_Cost`. 
+        * *Note*: Market Price volatility (MTM) in FVOCI only hits Equity (OCI), NOT the Net Income line. Do NOT panic over OCI drawdowns unless credit impairment is imminent.
+    * **FVTPL**: The only place where MTM matters for P&L. Focus on **Total Return**.
+
+* **FUNDING & SPREAD LOGIC**:
+    * **Fixed FTP**: My cost of capital is **FIXED** internally. 
+    * *Implication*: I am immune to daily repo spikes for the back-book.
+    * *Alpha Source*: My "Alpha" is strictly the **Static Spread** at the moment of purchase (Entry Yield - FTP).
+    * *Action*: When analyzing new trades, focus on **Lock-in Spread**. Once bought, the spread is locked (for AC/FVOCI).
+
+* **ASSET CLASSES & HIERARCHY**:
+    * **Core Rates**: UST / China Sovereign (Liquidity & Duration Anchor).
+    * **Credit Satellites**: China Offshore (LGFV/SOE/Financials).
+        * *View*: Treat these as "Quasi-Sovereign with a Spread."
+        * *Risk*: Correlation is 1.0 with China Macro, but denominated in Hard Currency (USD/EUR).
+    * **Currency**: Multi-currency (USD, EUR, etc.), but all risk is aggregated in **USD Equivalent**.
+
+* **EXECUTION STYLE**:
+    * **Buy & Hold**: Turnover is low. We are **Liquidity Providers**, not Takers.
+    * **Vintage Risk**: Since we don't trade often, the *timing* of the entry determines the vintage's profitability for years.
+    * **Aggregation Rule**: Positions are aggregated by `ID_ISIN + Account`. No FIFO/LIFO complexity; use Weighted Average Cost.
+
+---
+

@@ -70,5 +70,10 @@ Since funding is unlimited, we buy whenever this condition is met:
 2.  **AUD "Step-In"**:
     * Buy ACGBs **only on dip**.
     * Set up a **Coupon Swap** facility to hedge the P&L translation risk if needed.
+Update Content:
+
+### Tactical Execution (The "Lag" Trade):
+* AUD (The Hike Call): If RBA hikes in Feb, deploy maximum capital in Feb Spot. The spread is artificially widened by the lag.
+* USD (The Cut Defense): Stop buying immediately after the first Fed cut is priced in, wait for FTP to reset lower next month. Do not buy in the "Gap Month".
 
 > *Signed: CIO Office / Unconstrained Mandate*

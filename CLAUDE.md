@@ -70,10 +70,11 @@ Output a structured Markdown log summarizing the session:
     * **FVTPL**: The only place where MTM matters for P&L. Focus on **Total Return**.
 
 * **FUNDING & SPREAD LOGIC**:
-    * **Fixed FTP**: My cost of capital is **FIXED** internally. 
-    * *Implication*: I am immune to daily repo spikes for the back-book.
-    * *Alpha Source*: My "Alpha" is strictly the **Static Spread** at the moment of purchase (Entry Yield - FTP).
-    * *Action*: When analyzing new trades, focus on **Lock-in Spread**. Once bought, the spread is locked (for AC/FVOCI).
+   * Rule: FTP for Month $T$ = Avg 3M Gov Yield of Month $T-1$.
+   * Implication: Funding costs are Backward-Looking. Asset Yields are Forward-Looking.
+   * Strategy:
+      * In Hiking Cycle (AUD?): Aggressively Buy immediately after a rate hike. (Asset Yield $\uparrow$, FTP flat).
+      * In Cutting Cycle (USD): Front-load purchases BEFORE the cut. (Avoid buying when Asset Yield $\downarrow$ but FTP stays high).
 
 * **ASSET CLASSES & HIERARCHY**:
     * **Core Rates**: UST / China Sovereign (Liquidity & Duration Anchor).
@@ -88,4 +89,5 @@ Output a structured Markdown log summarizing the session:
     * **Aggregation Rule**: Positions are aggregated by `ID_ISIN + Account`. No FIFO/LIFO complexity; use Weighted Average Cost.
 
 ---
+
 

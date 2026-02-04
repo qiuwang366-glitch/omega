@@ -278,9 +278,7 @@ MONTHS_CN = {
     "Sep": "9月", "Oct": "10月", "Nov": "11月", "Dec": "12月",
 }
 
-# Unit conversion: 1 亿元 = 100 MM USD (assuming ~7.25 USDCNY)
-# For display purposes, we use USD MM as base and convert
-USD_TO_CNY = 7.25  # Exchange rate assumption
+# Unit conversion: 1 亿美元 = 100 MM USD
 MM_TO_YI = 100.0   # 1亿 = 100 MM
 
 

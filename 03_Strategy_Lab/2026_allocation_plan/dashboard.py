@@ -39,7 +39,6 @@ from config import (
     DEFAULT_SUBPORTFOLIOS,
     MONTHS_2026,
     MONTHS_CN,
-    USD_TO_CNY,
     MM_TO_YI,
 )
 from data_provider import MarketDataFactory, SyntheticMarketData
@@ -321,13 +320,13 @@ def create_fx_sensitivity_heatmap(
 
 
 def mm_to_yi(value_mm: float) -> float:
-    """Convert USD MM to 亿元 (assuming USD/CNY rate)."""
-    return value_mm * USD_TO_CNY / MM_TO_YI
+    """Convert USD MM to 亿美元 (1亿 = 100 MM)."""
+    return value_mm / MM_TO_YI
 
 
 def yi_to_mm(value_yi: float) -> float:
-    """Convert 亿元 to USD MM."""
-    return value_yi * MM_TO_YI / USD_TO_CNY
+    """Convert 亿美元 to USD MM."""
+    return value_yi * MM_TO_YI
 
 
 def create_maturity_investment_chart(
@@ -350,7 +349,7 @@ def create_maturity_investment_chart(
     month_labels = [MONTHS_CN[m] for m in MONTHS_2026]
 
     for idx, (key, profile) in enumerate(profiles.items(), start=1):
-        # Convert to 亿元
+        # Convert to 亿美元
         maturities_yi = [mm_to_yi(profile.maturity_schedule.get(m, 0.0)) for m in MONTHS_2026]
         reinvest_yi = [mm_to_yi(profile.investment_plan.get(m, 0.0)) for m in MONTHS_2026]
         additional_yi = [mm_to_yi(profile.additional_investment.get(m, 0.0)) for m in MONTHS_2026]
@@ -362,7 +361,7 @@ def create_maturity_investment_chart(
                 x=month_labels,
                 y=[-m for m in maturities_yi],
                 marker_color=colors["maturity"],
-                hovertemplate="%{x}<br>到期: %{customdata:.2f}亿元<extra></extra>",
+                hovertemplate="%{x}<br>到期: %{customdata:.2f}亿美元<extra></extra>",
                 customdata=maturities_yi,
                 showlegend=(idx == 1),
                 legendgroup="maturity",
@@ -377,7 +376,7 @@ def create_maturity_investment_chart(
                 x=month_labels,
                 y=reinvest_yi,
                 marker_color=colors["reinvest"],
-                hovertemplate="%{x}<br>到期再投: %{y:.2f}亿元<extra></extra>",
+                hovertemplate="%{x}<br>到期再投: %{y:.2f}亿美元<extra></extra>",
                 showlegend=(idx == 1),
                 legendgroup="reinvest",
             ),
@@ -391,7 +390,7 @@ def create_maturity_investment_chart(
                 x=month_labels,
                 y=additional_yi,
                 marker_color=colors["additional"],
-                hovertemplate="%{x}<br>追加投资: %{y:.2f}亿元<extra></extra>",
+                hovertemplate="%{x}<br>追加投资: %{y:.2f}亿美元<extra></extra>",
                 showlegend=(idx == 1),
                 legendgroup="additional",
             ),
@@ -414,8 +413,8 @@ def create_maturity_investment_chart(
         ),
     )
 
-    fig.update_yaxes(title_text="金额 (亿元)", row=1, col=1)
-    fig.update_yaxes(title_text="金额 (亿元)", row=2, col=1)
+    fig.update_yaxes(title_text="金额 (亿美元)", row=1, col=1)
+    fig.update_yaxes(title_text="金额 (亿美元)", row=2, col=1)
     fig.update_xaxes(title_text="月份", row=2, col=1)
 
     return fig
@@ -427,7 +426,7 @@ def create_cashflow_waterfall(
     """Create waterfall chart showing cumulative cash position."""
     month_labels = [MONTHS_CN[m] for m in MONTHS_2026]
 
-    # Convert to 亿元
+    # Convert to 亿美元
     maturities_yi = [mm_to_yi(profile.maturity_schedule.get(m, 0.0)) for m in MONTHS_2026]
     reinvest_yi = [mm_to_yi(profile.investment_plan.get(m, 0.0)) for m in MONTHS_2026]
     additional_yi = [mm_to_yi(profile.additional_investment.get(m, 0.0)) for m in MONTHS_2026]
@@ -444,7 +443,7 @@ def create_cashflow_waterfall(
         x=month_labels,
         y=net_flows,
         marker_color=["#27AE60" if x >= 0 else "#E74C3C" for x in net_flows],
-        hovertemplate="%{x}<br>净现金流: %{y:.2f}亿元<extra></extra>",
+        hovertemplate="%{x}<br>净现金流: %{y:.2f}亿美元<extra></extra>",
     ))
 
     # Cumulative line
@@ -455,13 +454,13 @@ def create_cashflow_waterfall(
         mode="lines+markers",
         line=dict(color="#9B59B6", width=3),
         marker=dict(size=8),
-        hovertemplate="%{x}<br>累计: %{y:.2f}亿元<extra></extra>",
+        hovertemplate="%{x}<br>累计: %{y:.2f}亿美元<extra></extra>",
     ))
 
     fig.update_layout(
         title=f"{profile.name}: 净现金流与累计头寸",
         xaxis=dict(title="月份"),
-        yaxis=dict(title="金额 (亿元)"),
+        yaxis=dict(title="金额 (亿美元)"),
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
     )
@@ -472,7 +471,7 @@ def create_cashflow_waterfall(
 def create_subportfolio_summary_table(
     profiles: dict[str, SubPortfolioProfile],
 ) -> pd.DataFrame:
-    """Create summary table for sub-portfolios in Chinese with 亿元 units."""
+    """Create summary table for sub-portfolios in Chinese with 亿美元 units."""
     records = []
     for key, p in profiles.items():
         total_mat_yi = mm_to_yi(p.total_maturing_2026)
@@ -485,17 +484,17 @@ def create_subportfolio_summary_table(
         records.append({
             "组合": p.name,
             "币种": p.currency.value,
-            "规模(亿元)": f"{aum_yi:.1f}",
+            "规模(亿美元)": f"{aum_yi:.1f}",
             "持仓数": p.n_positions,
             "收益率(%)": f"{p.wtd_avg_yield * 100:.2f}",
             "久期": f"{p.wtd_avg_duration:.2f}",
-            "年化利息(亿元)": f"{carry_yi:.2f}",
-            "2026到期(亿元)": f"{total_mat_yi:.2f}",
+            "年化利息(亿美元)": f"{carry_yi:.2f}",
+            "2026到期(亿美元)": f"{total_mat_yi:.2f}",
             "到期占比": f"{p.maturity_pct_of_aum * 100:.1f}%",
-            "到期再投(亿元)": f"{total_reinv_yi:.2f}",
-            "追加投资(亿元)": f"{total_add_yi:.2f}",
-            "总投放(亿元)": f"{total_deploy_yi:.2f}",
-            "缺口(亿元)": f"{total_mat_yi - total_deploy_yi:.2f}",
+            "到期再投(亿美元)": f"{total_reinv_yi:.2f}",
+            "追加投资(亿美元)": f"{total_add_yi:.2f}",
+            "总投放(亿美元)": f"{total_deploy_yi:.2f}",
+            "缺口(亿美元)": f"{total_mat_yi - total_deploy_yi:.2f}",
         })
     return pd.DataFrame(records)
 
@@ -532,7 +531,7 @@ def create_yield_impact_analysis(
             "到期平均收益率(%)": f"{avg_exit_yield * 100:.2f}",
             "新投预估收益率(%)": f"{current_yield_estimate * 100:.2f}",
             "收益率提升(bp)": f"{yield_pickup * 10000:.0f}",
-            "到期量(亿元)": f"{mm_to_yi(total_mat):.2f}",
+            "到期量(亿美元)": f"{mm_to_yi(total_mat):.2f}",
             "预估NII提升(万元)": f"{mm_to_yi(total_mat) * yield_pickup * 10000:.0f}",
         })
     return pd.DataFrame(records)
@@ -781,7 +780,7 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
         st.markdown("""
         > **再投资风险管理**: 跟踪到期墙，规划到期再投与追加投资节奏。
-        > 下方可编辑每月的投资计划，单位为**亿元**（按1美元=7.25人民币换算）。
+        > 下方可编辑每月的投资计划，单位为**亿美元**（1亿 = 100 MM USD）。
         """)
 
         # Get current plans from session state
@@ -823,8 +822,8 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
             with st.expander(f"📌 {profile.name} ({profile.currency.value})", expanded=True):
                 st.markdown(f"""
-                **当前规模**: {aum_yi:.1f}亿元 |
-                **2026到期**: {mat_yi:.2f}亿元 ({profile.maturity_pct_of_aum*100:.1f}%)
+                **当前规模**: {aum_yi:.1f}亿美元 |
+                **2026到期**: {mat_yi:.2f}亿美元 ({profile.maturity_pct_of_aum*100:.1f}%)
                 """)
 
                 # Two sections: 到期再投 and 追加投资
@@ -963,14 +962,14 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("2026总到期", f"{total_mat_yi:.2f}亿元")
+            st.metric("2026总到期", f"{total_mat_yi:.2f}亿美元")
         with m2:
-            st.metric("到期再投", f"{total_reinv_yi:.2f}亿元")
+            st.metric("到期再投", f"{total_reinv_yi:.2f}亿美元")
         with m3:
-            st.metric("追加投资", f"{total_add_yi:.2f}亿元", delta=f"+{total_add_yi:.2f}" if total_add_yi > 0 else None)
+            st.metric("追加投资", f"{total_add_yi:.2f}亿美元", delta=f"+{total_add_yi:.2f}" if total_add_yi > 0 else None)
         with m4:
             gap = total_mat_yi - total_deploy_yi
-            st.metric("资金缺口", f"{gap:.2f}亿元", delta=f"{-gap:.2f}" if gap != 0 else "0", delta_color="inverse")
+            st.metric("资金缺口", f"{gap:.2f}亿美元", delta=f"{-gap:.2f}" if gap != 0 else "0", delta_color="inverse")
 
     # === Tab 3: Simulation ===
     with tab3:

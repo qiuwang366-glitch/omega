@@ -129,9 +129,9 @@ def create_surface_plot(
     fig.update_layout(
         title=dict(text=title, font=dict(size=20)),
         scene=dict(
-            xaxis=dict(title="Tenor (Years)", titlefont=dict(size=14)),
-            yaxis=dict(title="Forward Start (Years)", titlefont=dict(size=14)),
-            zaxis=dict(title="Yield (%)", titlefont=dict(size=14)),
+            xaxis=dict(title=dict(text="Tenor (Years)", font=dict(size=14))),
+            yaxis=dict(title=dict(text="Forward Start (Years)", font=dict(size=14))),
+            zaxis=dict(title=dict(text="Yield (%)", font=dict(size=14))),
             camera=dict(
                 eye=dict(x=1.5, y=-1.5, z=0.8),
             ),

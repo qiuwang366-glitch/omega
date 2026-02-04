@@ -1,221 +1,80 @@
 """
-forward_rate_data.py - Real Forward Rate Surface Data
+forward_rate_data.py - Forward Rate Surface Interface
 =====================================================
-Stores actual market forward rate matrices by currency.
-Data source: Bloomberg / Internal treasury system.
+Interface layer for forward rate data. Data is now loaded from the
+centralized Data Warehouse (JSON) instead of being hardcoded.
+
+The actual data resides in: 01_Data_Warehouse/db/yield_curves_snapshot.json
+Data loading/interpolation logic: 01_Data_Warehouse/etl_scripts/yield_curve_loader.py
+
+This module provides backward-compatible access to the data through the same
+interface (ForwardRateSurface, FORWARD_SURFACES registry, get_forward_surface).
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+# Add Data Warehouse to path for imports
+_THIS_DIR = Path(__file__).parent
+_DATA_WAREHOUSE_ETL = _THIS_DIR.parent.parent / "01_Data_Warehouse" / "etl_scripts"
+if str(_DATA_WAREHOUSE_ETL) not in sys.path:
+    sys.path.insert(0, str(_DATA_WAREHOUSE_ETL))
 
-@dataclass(frozen=True)
-class ForwardRateSurface:
-    """
-    Container for a forward rate matrix.
-
-    Axes:
-    - Rows (tenors): Underlying bond maturity (e.g., 1M, 2Y, 10Y)
-    - Columns (forward_starts): When the forward contract starts (e.g., Spot, 3M, 1Y)
-
-    Values are in percentage points (e.g., 4.50 = 4.50%).
-    """
-    currency: str
-    as_of_date: date
-    tenor_labels: tuple[str, ...]      # Row labels: "1M", "2M", "1Y", etc.
-    forward_labels: tuple[str, ...]    # Column labels: "Spot", "3M", "1Y", etc.
-    rates: NDArray[np.float64]         # Shape: (n_tenors, n_forwards)
-
-    @property
-    def tenors_years(self) -> NDArray[np.float64]:
-        """Convert tenor labels to years."""
-        return np.array([_parse_tenor(t) for t in self.tenor_labels])
-
-    @property
-    def forwards_years(self) -> NDArray[np.float64]:
-        """Convert forward labels to years."""
-        return np.array([_parse_tenor(f) for f in self.forward_labels])
-
-    def get_rate(self, tenor: str, forward: str) -> float:
-        """Get a specific rate by labels."""
-        i = self.tenor_labels.index(tenor)
-        j = self.forward_labels.index(forward)
-        return float(self.rates[i, j])
-
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert to pandas DataFrame for display."""
-        return pd.DataFrame(
-            self.rates,
-            index=list(self.tenor_labels),
-            columns=list(self.forward_labels),
-        )
-
-    def get_spot_curve(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Extract spot yield curve (first column)."""
-        return self.tenors_years, self.rates[:, 0] / 100  # Convert to decimal
-
-
-def _parse_tenor(label: str) -> float:
-    """Parse tenor string to years. 'Spot' -> 0, '3M' -> 0.25, '1Y' -> 1.0"""
-    label = label.strip()
-    if label.lower() in ("spot", "息票 (spot)", "息票"):
-        return 0.0
-    if label.endswith("个月") or label.endswith("M") or label.endswith("m"):
-        # Handle Chinese "X个月" or "XM"
-        num_str = label.replace("个月", "").replace("M", "").replace("m", "").strip()
-        return float(num_str) / 12
-    if label.endswith("年") or label.endswith("Y") or label.endswith("y"):
-        num_str = label.replace("年", "").replace("Y", "").replace("y", "").strip()
-        return float(num_str)
-    # Try direct parse as months
-    try:
-        return float(label) / 12
-    except ValueError:
-        return 0.0
-
-
-# ============================================================================
-# USD Forward Rate Surface (as of latest update)
-# ============================================================================
-USD_FORWARD_SURFACE = ForwardRateSurface(
-    currency="USD",
-    as_of_date=date(2025, 1, 31),  # Update this when data refreshes
-    tenor_labels=(
-        "1M", "2M", "3M", "4M", "6M",
-        "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y",
-    ),
-    forward_labels=(
-        "Spot", "3M", "6M", "1Y", "2Y", "3Y", "4Y", "5Y", "10Y", "15Y", "30Y",
-    ),
-    rates=np.array([
-        # Spot,   3M,     6M,     1Y,     2Y,     3Y,     4Y,     5Y,    10Y,    15Y,    30Y
-        [3.6803, 3.6456, 3.3481, 3.5998, 3.7570, 4.0746, 4.0746, 4.5812, 5.6922, 5.6605, 5.0642],  # 1M
-        [3.6933, 3.5566, 3.3245, 3.6256, 3.7837, 4.1043, 4.1043, 4.6156, 5.7374, 5.7056, 5.1030],  # 2M
-        [3.6723, 3.5388, 3.3439, 3.6107, 3.7688, 4.0891, 4.0891, 4.5995, 5.7199, 5.6884, 5.0857],  # 3M
-        [3.6793, 3.5405, 3.3286, 3.6363, 3.7960, 4.1184, 4.1184, 4.6334, 5.7648, 5.7328, 5.1254],  # 4M
-        [3.6350, 3.4846, 3.3782, 3.6273, 3.7868, 4.1100, 4.1100, 4.6259, 5.7607, 5.7287, 5.1184],  # 6M
-        [3.4848, 3.4845, 3.5016, 3.6585, 3.8268, 4.1440, 4.1496, 4.6641, 5.7924, 5.7761, 5.1458],  # 1Y
-        [3.5737, 3.5920, 3.6177, 3.7413, 3.9816, 4.1474, 4.4011, 4.6717, 5.7845, 5.7761, 5.1393],  # 2Y
-        [3.6476, 3.6909, 3.7359, 3.8698, 4.0348, 4.3122, 4.4900, 4.7631, 5.7819, 5.7761, 5.1371],  # 3Y
-        [3.8376, 3.8863, 3.9377, 4.0690, 4.2731, 4.5006, 4.6647, 4.8683, 5.7826, 5.7537, 5.1378],  # 5Y
-        [4.0530, 4.0964, 4.1435, 4.2595, 4.4475, 4.6387, 4.8635, 5.0967, 5.7810, 5.5998, 5.1363],  # 7Y
-        [4.2765, 4.3475, 4.3987, 4.5175, 4.7250, 4.9229, 5.0888, 5.2647, 5.7702, 5.4854, 5.1365],  # 10Y
-        [4.8541, 4.8739, 4.9003, 4.9634, 5.0720, 5.1751, 5.2577, 5.3454, 5.5362, 5.3549, 5.1359],  # 20Y
-        [4.9050, 4.9211, 4.9428, 4.9943, 5.0835, 5.1679, 5.2358, 5.3080, 5.4636, 5.3145, 5.1360],  # 30Y
-    ], dtype=np.float64),
+# Import from centralized data loader
+from yield_curve_loader import (
+    ForwardRateSurface,
+    load_forward_surfaces,
+    get_surface_by_currency,
+    interpolate_rate,
+    interpolate_spot_rate,
+    build_new_money_yield_curve,
+    update_surface,
+    get_metadata,
+    _parse_tenor,
 )
 
 
 # ============================================================================
-# Placeholder surfaces for other currencies (update with real data)
+# Lazy-loaded Registry (populated on first access)
 # ============================================================================
-EUR_FORWARD_SURFACE = ForwardRateSurface(
-    currency="EUR",
-    as_of_date=date(2025, 1, 31),
-    tenor_labels=(
-        "1M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y",
-        "6Y", "7Y", "8Y", "9Y", "10Y", "15Y", "20Y", "25Y", "30Y",
-    ),
-    forward_labels=(
-        "Spot", "3M", "6M", "1Y", "2Y", "3Y", "4Y", "5Y", "10Y", "15Y", "30Y",
-    ),
-    rates=np.array([
-        # Spot,   3M,     6M,     1Y,     2Y,     3Y,     4Y,     5Y,    10Y,    15Y,    30Y
-        [1.9936, 2.0179, 1.9898, 2.1978, 2.2039, 2.4532, 2.7342, 2.8763, 3.9265, 4.0770, 4.2404],  # 1M
-        [1.9594, 2.0229, 1.9931, 2.2019, 2.3479, 2.5359, 2.7689, 2.8785, 4.0506, 4.0913, 4.2554],  # 3M
-        [1.9834, 2.0131, 1.9694, 2.2080, 2.4144, 2.6470, 2.8361, 2.8792, 4.0972, 4.1256, 4.2781],  # 6M
-        [1.9838, 1.9947, 2.0523, 2.2141, 2.4414, 2.6902, 2.8655, 2.8863, 4.1272, 4.1523, 4.3010],  # 9M
-        [1.9574, 2.0533, 2.0986, 2.2203, 2.4587, 2.7169, 2.8856, 2.8951, 4.1529, 4.1766, 4.3236],  # 1Y
-        [2.1176, 2.1565, 2.2115, 2.3384, 2.5855, 2.8002, 2.8903, 3.1553, 4.1537, 4.1807, 4.3181],  # 2Y
-        [2.2378, 2.2678, 2.3282, 2.4608, 2.6825, 2.8309, 3.0631, 3.2639, 4.1540, 4.1821, 4.3163],  # 3Y
-        [2.3608, 2.3905, 2.4449, 2.5624, 2.7334, 2.9737, 3.1656, 3.3317, 4.1541, 4.1854, 4.3153],  # 4Y
-        [2.4609, 2.4893, 2.5322, 2.6253, 2.8633, 3.0707, 3.2370, 3.4018, 4.1564, 4.1853, 4.3169],  # 5Y
-        [2.5309, 2.5708, 2.6279, 2.7488, 2.9601, 3.1438, 3.3089, 3.5154, 4.1594, 4.1853, 4.3162],  # 6Y
-        [2.6399, 2.6850, 2.7366, 2.8455, 3.0366, 3.2166, 3.4167, 3.5966, 4.1626, 4.1016, 4.3156],  # 7Y
-        [2.7385, 2.7771, 2.8242, 2.9242, 3.1109, 3.3197, 3.4974, 3.6573, 4.1650, 4.0123, 4.3152],  # 8Y
-        [2.8163, 2.8559, 2.9023, 3.0002, 3.2109, 3.3994, 3.5598, 3.7043, 4.1680, 3.9418, 4.3161],  # 9Y
-        [2.8896, 2.9390, 2.9906, 3.0982, 3.2907, 3.4631, 3.6097, 3.7428, 4.1694, 3.9271, 4.3158],  # 10Y
-        [3.2673, 3.2748, 3.3120, 3.3896, 3.5294, 3.6554, 3.7640, 3.8620, 4.0192, 4.0321, 4.3154],  # 15Y
-        [3.4440, 3.4421, 3.4722, 3.5354, 3.6270, 3.6984, 3.7541, 3.8168, 4.0730, 4.0834, 4.3153],  # 20Y
-        [3.5474, 3.4649, 3.4910, 3.5462, 3.6454, 3.7349, 3.8118, 3.8817, 4.1043, 4.1128, 4.3155],  # 25Y
-        [3.5490, 3.5481, 3.5716, 3.6211, 3.7101, 3.7907, 3.8600, 3.9232, 4.1241, 4.1316, 4.3154],  # 30Y
-    ], dtype=np.float64),
-)
+_SURFACES_CACHE: dict[str, ForwardRateSurface] | None = None
 
 
-AUD_FORWARD_SURFACE = ForwardRateSurface(
-    currency="AUD",
-    as_of_date=date(2025, 1, 31),
-    tenor_labels=(
-        "3M", "1Y", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y", "8Y",
-        "9Y", "10Y", "12Y", "15Y", "20Y", "30Y",
-    ),
-    forward_labels=(
-        "Spot", "3M", "6M", "1Y", "2Y", "3Y", "4Y", "5Y", "10Y", "15Y", "30Y",
-    ),
-    rates=np.array([
-        # Spot,   3M,     6M,     1Y,     2Y,     3Y,     4Y,     5Y,    10Y,    15Y,    30Y
-        [np.nan, 4.2619, 4.3492, 4.2810, 4.3271, 4.4622, 4.5291, 4.7476, 5.5374, 5.5910, 5.8765],  # 3M (Spot N/A)
-        [4.2500, 4.3339, 4.3445, 4.3569, 4.4779, 4.5752, 4.7497, 5.0009, 5.6624, 5.9998, 5.9518],  # 1Y
-        [4.3022, 4.3541, 4.3740, 4.4162, 4.5253, 4.6607, 4.8727, 5.1640, 5.6639, 6.0654, 5.9443],  # 2Y
-        [4.3603, 4.4027, 4.4249, 4.4667, 4.5966, 4.7693, 5.0195, 5.2910, 5.6643, 6.0873, 5.9418],  # 3Y
-        [4.4146, 4.4473, 4.4750, 4.5326, 4.6906, 4.9013, 5.1462, 5.3456, 5.6661, 6.1020, 5.9404],  # 4Y
-        [4.4945, 4.5126, 4.5437, 4.6177, 4.8073, 5.0210, 5.2143, 5.3747, 5.6709, 6.1079, 5.9426],  # 5Y
-        [4.5859, 4.5980, 4.6386, 4.7234, 4.9183, 5.0945, 5.2569, 5.4163, 5.7182, 6.1118, 5.9416],  # 6Y
-        [4.6636, 4.6970, 4.7402, 4.8265, 4.9927, 5.1447, 5.3059, 5.4463, 5.7680, 6.0939, 5.9409],  # 7Y
-        [4.7734, 4.7922, 4.8284, 4.8996, 5.0458, 5.1979, 5.3427, 5.4687, 5.8051, 6.0797, 5.9404],  # 8Y
-        [4.8559, 4.8559, 4.8885, 4.9539, 5.1006, 5.2394, 5.3712, 5.4866, 5.8353, 6.0673, 5.9415],  # 9Y
-        [4.8811, 4.9104, 4.9435, 5.0091, 5.1444, 5.2724, 5.3945, 5.5025, 5.8579, 6.0573, 5.9411],  # 10Y
-        [5.0450, 5.0056, 5.0343, 5.0915, 5.2100, 5.3233, 5.4499, 5.5719, 5.8813, 6.0436, 5.9404],  # 12Y
-        [5.1153, 5.1009, 5.1298, 5.1886, 5.3112, 5.4296, 5.5454, 5.6502, 5.8895, 6.0289, 5.9406],  # 15Y
-        [5.3128, 5.2633, 5.2880, 5.3371, 5.4348, 5.5290, 5.6199, 5.7021, 5.8971, 6.0158, 5.9404],  # 20Y
-        [5.3545, 5.3819, 5.4012, 5.4394, 5.5198, 5.5976, 5.6732, 5.7418, 5.9044, 6.0031, 5.9405],  # 30Y
-    ], dtype=np.float64),
-)
-
-
-CNH_FORWARD_SURFACE = ForwardRateSurface(
-    currency="CNH",
-    as_of_date=date(2025, 1, 31),
-    tenor_labels=("1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"),
-    forward_labels=("Spot", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "10Y"),
-    rates=np.array([
-        # Spot,   3M,     6M,     1Y,     2Y,     3Y,     5Y,    10Y
-        [1.85,  1.88,   1.92,   2.00,   2.15,   2.30,   2.55,   3.00],  # 1M
-        [1.82,  1.85,   1.90,   1.98,   2.13,   2.28,   2.53,   2.98],  # 3M
-        [1.80,  1.85,   1.92,   2.02,   2.18,   2.35,   2.60,   3.05],  # 6M
-        [1.85,  1.92,   2.02,   2.15,   2.35,   2.55,   2.82,   3.25],  # 1Y
-        [2.00,  2.10,   2.22,   2.40,   2.65,   2.88,   3.15,   3.55],  # 2Y
-        [2.15,  2.25,   2.38,   2.58,   2.85,   3.08,   3.35,   3.72],  # 3Y
-        [2.40,  2.50,   2.65,   2.85,   3.12,   3.35,   3.58,   3.88],  # 5Y
-        [2.60,  2.70,   2.85,   3.05,   3.30,   3.52,   3.72,   3.98],  # 7Y
-        [2.80,  2.90,   3.05,   3.25,   3.48,   3.68,   3.85,   4.05],  # 10Y
-        [3.10,  3.18,   3.30,   3.48,   3.68,   3.85,   3.98,   4.12],  # 20Y
-        [3.15,  3.22,   3.35,   3.52,   3.72,   3.88,   4.00,   4.12],  # 30Y
-    ], dtype=np.float64),
-)
-
-
-# ============================================================================
-# Registry for easy access
-# ============================================================================
-FORWARD_SURFACES: dict[str, ForwardRateSurface] = {
-    "USD": USD_FORWARD_SURFACE,
-    "EUR": EUR_FORWARD_SURFACE,
-    "AUD": AUD_FORWARD_SURFACE,
-    "CNH": CNH_FORWARD_SURFACE,
-}
+def _ensure_surfaces_loaded() -> dict[str, ForwardRateSurface]:
+    """Ensure surfaces are loaded from Data Warehouse."""
+    global _SURFACES_CACHE
+    if _SURFACES_CACHE is None:
+        try:
+            _SURFACES_CACHE = load_forward_surfaces()
+        except FileNotFoundError:
+            # Fallback: return empty dict if file not found
+            _SURFACES_CACHE = {}
+    return _SURFACES_CACHE
 
 
 def get_forward_surface(currency: str) -> ForwardRateSurface | None:
-    """Get forward rate surface for a currency."""
-    return FORWARD_SURFACES.get(currency.upper())
+    """
+    Get forward rate surface for a currency.
+
+    This function now loads data from the Data Warehouse instead of
+    returning hardcoded values.
+
+    Args:
+        currency: Currency code (USD, EUR, AUD, CNH)
+
+    Returns:
+        ForwardRateSurface or None if not found.
+    """
+    surfaces = _ensure_surfaces_loaded()
+    return surfaces.get(currency.upper())
 
 
 def update_usd_surface(
@@ -225,41 +84,223 @@ def update_usd_surface(
     """
     Update USD forward surface with new data.
 
+    This function now persists to the Data Warehouse JSON file.
+
     Args:
         rates: New rate matrix (same shape as existing)
         as_of_date: Date of the new data
     """
-    global USD_FORWARD_SURFACE, FORWARD_SURFACES
+    global _SURFACES_CACHE
 
-    USD_FORWARD_SURFACE = ForwardRateSurface(
-        currency="USD",
-        as_of_date=as_of_date or date.today(),
-        tenor_labels=USD_FORWARD_SURFACE.tenor_labels,
-        forward_labels=USD_FORWARD_SURFACE.forward_labels,
-        rates=rates,
-    )
-    FORWARD_SURFACES["USD"] = USD_FORWARD_SURFACE
+    # Update in the JSON file
+    update_surface("USD", rates, as_of_date)
+
+    # Invalidate cache to reload on next access
+    _SURFACES_CACHE = None
+
+
+def reload_surfaces() -> dict[str, ForwardRateSurface]:
+    """
+    Force reload of all surfaces from Data Warehouse.
+
+    Use this after external updates to the JSON file.
+
+    Returns:
+        Dictionary of all loaded surfaces.
+    """
+    global _SURFACES_CACHE
+    _SURFACES_CACHE = None
+    return _ensure_surfaces_loaded()
+
+
+# ============================================================================
+# Dynamic Registry Property (for backward compatibility)
+# ============================================================================
+class _ForwardSurfacesProxy(dict):
+    """Proxy dict that loads surfaces on first access."""
+
+    def __init__(self):
+        super().__init__()
+        self._loaded = False
+
+    def _ensure_loaded(self):
+        if not self._loaded:
+            surfaces = _ensure_surfaces_loaded()
+            self.update(surfaces)
+            self._loaded = True
+
+    def __getitem__(self, key):
+        self._ensure_loaded()
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._ensure_loaded()
+        return super().__contains__(key)
+
+    def get(self, key, default=None):
+        self._ensure_loaded()
+        return super().get(key, default)
+
+    def keys(self):
+        self._ensure_loaded()
+        return super().keys()
+
+    def values(self):
+        self._ensure_loaded()
+        return super().values()
+
+    def items(self):
+        self._ensure_loaded()
+        return super().items()
+
+    def __iter__(self):
+        self._ensure_loaded()
+        return super().__iter__()
+
+    def __len__(self):
+        self._ensure_loaded()
+        return super().__len__()
+
+
+# Backward-compatible registry
+FORWARD_SURFACES: dict[str, ForwardRateSurface] = _ForwardSurfacesProxy()
+
+
+# ============================================================================
+# Convenience Aliases (for old code that imported individual surfaces)
+# ============================================================================
+@property
+def USD_FORWARD_SURFACE() -> ForwardRateSurface | None:
+    return get_forward_surface("USD")
+
+
+@property
+def EUR_FORWARD_SURFACE() -> ForwardRateSurface | None:
+    return get_forward_surface("EUR")
+
+
+@property
+def AUD_FORWARD_SURFACE() -> ForwardRateSurface | None:
+    return get_forward_surface("AUD")
+
+
+@property
+def CNH_FORWARD_SURFACE() -> ForwardRateSurface | None:
+    return get_forward_surface("CNH")
+
+
+# ============================================================================
+# New Interpolation Interface (Enhanced Functionality)
+# ============================================================================
+def get_interpolated_rate(
+    currency: str,
+    tenor_years: float,
+    forward_years: float = 0.0,
+    method: Literal["linear", "cubic"] = "linear",
+) -> float | None:
+    """
+    Get interpolated rate for any tenor/forward combination.
+
+    This is the new recommended API for accessing rates, as it supports
+    non-standard tenors through interpolation.
+
+    Args:
+        currency: Currency code (USD, EUR, AUD, CNH)
+        tenor_years: Target tenor in years (e.g., 2.5 for 2.5Y)
+        forward_years: Forward start in years (e.g., 0.5 for 6M forward)
+        method: Interpolation method - "linear" or "cubic"
+
+    Returns:
+        Interpolated rate in percentage points, or None if currency not found.
+
+    Example:
+        >>> rate = get_interpolated_rate("USD", 2.5, 0.5, method="cubic")
+        >>> print(f"2.5Y rate at 6M forward: {rate:.2f}%")
+    """
+    surface = get_forward_surface(currency)
+    if surface is None:
+        return None
+
+    try:
+        return interpolate_rate(surface, tenor_years, forward_years, method)
+    except ValueError:
+        return None
+
+
+def get_new_money_yields(
+    currency: str,
+    tenors: list[float] | None = None,
+    forward_months: int = 0,
+    method: Literal["linear", "cubic"] = "linear",
+) -> dict[float, float]:
+    """
+    Get yield estimates for new money deployment.
+
+    Args:
+        currency: Currency code
+        tenors: Target tenors in years. Defaults to [2, 3, 5, 7, 10].
+        forward_months: Forward start in months (0 for spot).
+        method: Interpolation method.
+
+    Returns:
+        Dictionary mapping tenor (years) to yield (percentage).
+    """
+    if tenors is None:
+        tenors = [2.0, 3.0, 5.0, 7.0, 10.0]
+
+    surface = get_forward_surface(currency)
+    if surface is None:
+        return {}
+
+    return build_new_money_yield_curve(surface, tenors, forward_months, method)
 
 
 # ============================================================================
 # Module Test
 # ============================================================================
 if __name__ == "__main__":
-    print("=== Forward Rate Surface Data ===\n")
+    print("=== Forward Rate Data Module (Refactored) ===\n")
+
+    print("Data Source: 01_Data_Warehouse/db/yield_curves_snapshot.json\n")
+
+    # Test backward-compatible interface
+    print("Testing backward-compatible interface:")
+    print(f"  Available currencies: {list(FORWARD_SURFACES.keys())}")
 
     usd = get_forward_surface("USD")
     if usd:
-        print(f"USD Surface as of {usd.as_of_date}")
+        print(f"\nUSD Surface as of {usd.as_of_date}")
         print(f"Shape: {usd.rates.shape}")
-        print(f"\nSpot curve:")
+        print(f"\nSpot curve (via get_spot_curve):")
         tenors, spots = usd.get_spot_curve()
-        for t, s in zip(tenors, spots):
+        for t, s in list(zip(tenors, spots))[:5]:
             print(f"  {t:.2f}Y: {s*100:.2f}%")
 
-        print(f"\nSample forward rates:")
+        print(f"\nSample forward rates (via get_rate):")
         print(f"  3M starting in 1Y: {usd.get_rate('3M', '1Y'):.2f}%")
         print(f"  2Y starting in 2Y: {usd.get_rate('2Y', '2Y'):.2f}%")
-        print(f"  10Y starting in 5Y: {usd.get_rate('10Y', '5Y'):.2f}%")
 
-        print(f"\nFull DataFrame:")
-        print(usd.to_dataframe())
+    # Test new interpolation interface
+    print("\n--- New Interpolation Interface ---")
+    print("Interpolated rates (non-standard tenors):")
+    test_cases = [
+        ("USD", 2.5, 0.0),
+        ("USD", 4.0, 0.5),
+        ("EUR", 3.5, 1.0),
+        ("AUD", 8.0, 0.25),
+    ]
+
+    for ccy, tenor, fwd in test_cases:
+        rate = get_interpolated_rate(ccy, tenor, fwd, method="cubic")
+        if rate:
+            fwd_label = f"@ {fwd*12:.0f}M fwd" if fwd > 0 else "(spot)"
+            print(f"  {ccy} {tenor}Y {fwd_label}: {rate:.2f}%")
+
+    # Test new money yields
+    print("\nNew Money Yields (USD):")
+    yields = get_new_money_yields("USD", [2, 3, 5, 7, 10], forward_months=0)
+    for tenor, rate in yields.items():
+        print(f"  {tenor:.0f}Y: {rate:.2f}%")
+
+    # Metadata
+    print(f"\nData Warehouse Metadata: {get_metadata()}")

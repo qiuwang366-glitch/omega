@@ -894,16 +894,6 @@ def render_main_content(settings: dict[str, Any]) -> None:
         f"AUM: **$60B** | Horizon: **2026-2028**"
     )
 
-    # === Sticky Strategy Header ===
-    st.markdown("---")
-    selected_strategy = render_sticky_header()
-
-    # Apply strategy if changed
-    if selected_strategy:
-        profiles = st.session_state.subportfolio_plans
-        apply_strategy(selected_strategy, profiles)
-        st.rerun()
-
     # === Tabs ===
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 Yield Surface",
@@ -1017,157 +1007,83 @@ def render_main_content(settings: dict[str, Any]) -> None:
         fig_comp = create_curve_comparison_plot(params_list)
         st.plotly_chart(fig_comp, use_container_width=True)
 
-    # === Tab 2: 2026 Allocation Plan ===
+    # === Tab 2: 2026 Allocation Plan (Step-by-Step Workflow) ===
     with tab2:
         st.header("2026年子组合配置计划")
 
         st.markdown("""
-        > **再投资风险管理**: 跟踪到期墙，规划到期再投与追加投资节奏。
-        > 下方可编辑每月的投资计划，单位为**亿美元**（1亿 = 100 MM USD）。
+        > **配置工作流**: 按步骤完成2026年到期再投资配置，单位为**亿美元**（1亿 = 100 MM USD）。
         """)
 
         # Get current plans from session state
         profiles = st.session_state.subportfolio_plans
 
+        # =====================================================================
+        # STEP 1: 到期情况与组合概览
+        # =====================================================================
+        st.markdown("---")
+        st.subheader("📊 Step 1: 到期情况与组合概览")
+
+        st.markdown("首先了解当前组合的到期分布和基本情况。")
+
         # Summary table
-        st.subheader("组合概览")
         summary_df = create_subportfolio_summary_table(profiles)
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-        # Main visualization
-        st.subheader("到期墙与投资计划")
+        # Main visualization - Maturity Wall
         fig_maturity = create_maturity_investment_chart(profiles)
         st.plotly_chart(fig_maturity, use_container_width=True)
 
-        # Enhanced Yield Impact Analysis with Currency & Duration Granularity
-        st.subheader("收益率影响分析 (增强版)")
-
-        st.markdown("""
-        > **分析维度**: USD vs Non-USD 分组 | 久期敏感性 | 资本损益估算
-        > $$\\Delta P \\approx -D \\times \\Delta y$$ (久期近似公式)
-        """)
-
-        # Input section for yield estimates and durations
-        with st.expander("📊 参数设置 (新投收益率 & 组合久期)", expanded=True):
-            col_params1, col_params2 = st.columns(2)
-
-            with col_params1:
-                st.markdown("**新投预估收益率 (%)**")
-                yield_cols = st.columns(4)
-                yield_estimates = {}
-                for i, ccy in enumerate(["USD", "EUR", "AUD", "CNH"]):
-                    with yield_cols[i]:
-                        default_yield = st.session_state.new_money_yields.get(ccy, 4.5)
-                        yield_estimates[ccy] = st.number_input(
-                            f"{ccy}",
-                            min_value=0.0,
-                            max_value=10.0,
-                            value=float(default_yield),
-                            step=0.1,
-                            key=f"yield_{ccy}",
-                            format="%.2f",
-                        )
-                        st.session_state.new_money_yields[ccy] = yield_estimates[ccy]
-
-            with col_params2:
-                st.markdown("**组合久期 (年)**")
-                dur_cols = st.columns(4)
-                durations = {}
-                for i, ccy in enumerate(["USD", "EUR", "AUD", "CNH"]):
-                    with dur_cols[i]:
-                        default_dur = st.session_state.portfolio_durations.get(ccy, 3.5)
-                        durations[ccy] = st.number_input(
-                            f"{ccy}",
-                            min_value=0.0,
-                            max_value=15.0,
-                            value=float(default_dur),
-                            step=0.1,
-                            key=f"dur_{ccy}",
-                            format="%.2f",
-                        )
-                        st.session_state.portfolio_durations[ccy] = durations[ccy]
-
-            # Rate change scenario for capital gain/loss
-            st.markdown("**利率变动情景 (bp)**")
-            rate_change_bp = st.slider(
-                "预期利率变动",
-                min_value=-100,
-                max_value=100,
-                value=0,
-                step=5,
-                key="rate_change_slider",
-                help="正值=加息, 负值=降息. 用于计算资本损益: ΔP = -D × Δy",
-            )
-
-        # Display enhanced analysis
-        summary_df, detail_df = create_enhanced_yield_impact_analysis(
-            profiles, yield_estimates, durations, rate_change_bp
-        )
-
-        col_sum, col_det = st.columns([1, 2])
-        with col_sum:
-            st.markdown("**分组汇总 (USD vs Non-USD)**")
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
-        with col_det:
-            st.markdown("**组合明细**")
-            st.dataframe(detail_df, use_container_width=True, hide_index=True)
-
-        # Forward rate based new money yields (from Data Warehouse)
+        # =====================================================================
+        # STEP 2: 选择投资策略
+        # =====================================================================
         st.markdown("---")
-        st.markdown("**市场隐含新投收益率 (Forward Rate Surface)**")
+        st.subheader("🎯 Step 2: 选择到期再投策略")
 
-        fwd_col1, fwd_col2 = st.columns([1, 3])
-        with fwd_col1:
-            fwd_months = st.selectbox(
-                "Forward Start",
-                options=[0, 3, 6, 12],
-                format_func=lambda x: "Spot" if x == 0 else f"{x}M Forward",
-                key="fwd_months_select",
-            )
-            target_tenor = st.selectbox(
-                "Target Tenor",
-                options=[2.0, 3.0, 5.0, 7.0, 10.0],
-                format_func=lambda x: f"{int(x)}Y",
-                key="target_tenor_select",
-                index=2,  # Default 5Y
-            )
+        st.markdown("选择一个快捷策略来设置到期再投计划，或在下方手动编辑。")
 
-        with fwd_col2:
-            # Get rates from forward surface
-            fwd_rates_data = []
-            for ccy in ["USD", "EUR", "AUD", "CNH"]:
-                rate = get_interpolated_rate(ccy, target_tenor, fwd_months / 12, method="cubic")
-                if rate is not None:
-                    fwd_rates_data.append({
-                        "币种": ccy,
-                        f"{int(target_tenor)}Y @ {'Spot' if fwd_months == 0 else str(fwd_months) + 'M Fwd'} (%)": f"{rate:.2f}",
-                    })
+        # Strategy buttons in a single row
+        strategy_cols = st.columns([1, 1, 1, 1, 2])
 
-            if fwd_rates_data:
-                st.dataframe(pd.DataFrame(fwd_rates_data), use_container_width=True, hide_index=True)
-            else:
-                st.info("Forward rate data not available. Check Data Warehouse.")
+        with strategy_cols[0]:
+            if st.button("🔄 匹配到期", help="每月到期再投 = 当月到期量", use_container_width=True, type="primary" if st.session_state.active_strategy == "match_maturity" else "secondary"):
+                apply_strategy("match_maturity", profiles)
+                st.session_state.active_strategy = "match_maturity"
+                st.rerun()
 
-        # Editable investment plan
-        st.markdown("---")
-        st.subheader("编辑投资计划")
+        with strategy_cols[1]:
+            if st.button("⚡ 前置Q1", help="40% 1月 / 35% 2月 / 25% 3月", use_container_width=True, type="primary" if st.session_state.active_strategy == "frontload_q1" else "secondary"):
+                apply_strategy("frontload_q1", profiles)
+                st.session_state.active_strategy = "frontload_q1"
+                st.rerun()
 
-        for key, profile in profiles.items():
-            aum_yi = mm_to_yi(profile.aum_usd_mm)
-            mat_yi = mm_to_yi(profile.total_maturing_2026)
+        with strategy_cols[2]:
+            if st.button("📅 均匀分布", help="平均分配到12个月", use_container_width=True, type="primary" if st.session_state.active_strategy == "even_distribution" else "secondary"):
+                apply_strategy("even_distribution", profiles)
+                st.session_state.active_strategy = "even_distribution"
+                st.rerun()
 
-            with st.expander(f"📌 {profile.name} ({profile.currency.value})", expanded=True):
-                st.markdown(f"""
-                **当前规模**: {aum_yi:.1f}亿美元 |
-                **2026到期**: {mat_yi:.2f}亿美元 ({profile.maturity_pct_of_aum*100:.1f}%)
-                """)
+        with strategy_cols[3]:
+            if st.button("🗑️ 清空计划", help="清空所有投资计划", use_container_width=True, type="primary" if st.session_state.active_strategy == "clear_all" else "secondary"):
+                apply_strategy("clear_all", profiles)
+                st.session_state.active_strategy = "clear_all"
+                st.rerun()
+
+        with strategy_cols[4]:
+            st.markdown(f"**当前策略**: `{st.session_state.active_strategy}`")
+
+        # Manual editing in collapsible section
+        with st.expander("✏️ 手动编辑投资计划 (可选)", expanded=False):
+            for key, profile in profiles.items():
+                aum_yi = mm_to_yi(profile.aum_usd_mm)
+                mat_yi = mm_to_yi(profile.total_maturing_2026)
+
+                st.markdown(f"**{profile.name}** ({profile.currency.value}) | 规模: {aum_yi:.1f}亿 | 到期: {mat_yi:.2f}亿")
 
                 # Two sections: 到期再投 and 追加投资
                 tab_reinv, tab_add = st.tabs(["📥 到期再投", "📈 追加投资"])
 
                 with tab_reinv:
-                    st.caption("到期再投：将到期资金重新投入市场")
                     cols = st.columns(6)
                     updated_reinv = profile.investment_plan.copy()
 
@@ -1177,10 +1093,10 @@ def render_main_content(settings: dict[str, Any]) -> None:
                         current_reinv_yi = mm_to_yi(profile.investment_plan.get(month, 0.0))
 
                         with cols[col_idx]:
+                            label = f"{MONTHS_CN[month]}"
                             if maturity_amt_yi > 0:
-                                st.caption(f"{MONTHS_CN[month]}: 到期{maturity_amt_yi:.2f}亿")
-                            else:
-                                st.caption(f"{MONTHS_CN[month]}")
+                                label += f" (到期{maturity_amt_yi:.1f})"
+                            st.caption(label)
 
                             new_val_yi = st.number_input(
                                 f"再投({month})",
@@ -1200,7 +1116,6 @@ def render_main_content(settings: dict[str, Any]) -> None:
                     profile.investment_plan = updated_reinv
 
                 with tab_add:
-                    st.caption("追加投资：新增资金配置（非到期再投）")
                     cols = st.columns(6)
                     updated_add = profile.additional_investment.copy()
 
@@ -1230,10 +1145,145 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
                 # Update session state
                 st.session_state.subportfolio_plans[key] = profile
+                st.markdown("---")
 
-        # Cashflow analysis
+        # =====================================================================
+        # STEP 3: 新投收益分析
+        # =====================================================================
         st.markdown("---")
-        st.subheader("净现金流分析")
+        st.subheader("💹 Step 3: 新投收益分析")
+
+        st.markdown("""
+        分析新投资的收益率影响。公式: $$\\Delta P \\approx -D \\times \\Delta y$$
+        """)
+
+        # Parameter inputs in a compact layout
+        param_col1, param_col2, param_col3 = st.columns([2, 2, 1])
+
+        with param_col1:
+            st.markdown("**新投预估收益率 (%)**")
+            yield_cols = st.columns(4)
+            yield_estimates = {}
+            for i, ccy in enumerate(["USD", "EUR", "AUD", "CNH"]):
+                with yield_cols[i]:
+                    default_yield = st.session_state.new_money_yields.get(ccy, 4.5)
+                    yield_estimates[ccy] = st.number_input(
+                        ccy,
+                        min_value=0.0,
+                        max_value=10.0,
+                        value=float(default_yield),
+                        step=0.1,
+                        key=f"yield_{ccy}",
+                        format="%.2f",
+                    )
+                    st.session_state.new_money_yields[ccy] = yield_estimates[ccy]
+
+        with param_col2:
+            st.markdown("**组合久期 (年)**")
+            dur_cols = st.columns(4)
+            durations = {}
+            for i, ccy in enumerate(["USD", "EUR", "AUD", "CNH"]):
+                with dur_cols[i]:
+                    default_dur = st.session_state.portfolio_durations.get(ccy, 3.5)
+                    durations[ccy] = st.number_input(
+                        ccy,
+                        min_value=0.0,
+                        max_value=15.0,
+                        value=float(default_dur),
+                        step=0.1,
+                        key=f"dur_{ccy}",
+                        format="%.2f",
+                    )
+                    st.session_state.portfolio_durations[ccy] = durations[ccy]
+
+        with param_col3:
+            st.markdown("**利率变动 (bp)**")
+            rate_change_bp = st.number_input(
+                "预期变动",
+                min_value=-100,
+                max_value=100,
+                value=0,
+                step=5,
+                key="rate_change_input",
+                help="正值=加息, 负值=降息",
+            )
+
+        # Display enhanced analysis
+        summary_df_yield, detail_df = create_enhanced_yield_impact_analysis(
+            profiles, yield_estimates, durations, rate_change_bp
+        )
+
+        col_sum, col_det = st.columns([1, 2])
+        with col_sum:
+            st.markdown("**分组汇总 (USD vs Non-USD)**")
+            st.dataframe(summary_df_yield, use_container_width=True, hide_index=True)
+
+        with col_det:
+            st.markdown("**组合明细**")
+            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+        # Forward rate reference (collapsible)
+        with st.expander("📈 市场隐含收益率参考 (Forward Rate Surface)", expanded=False):
+            fwd_col1, fwd_col2 = st.columns([1, 3])
+            with fwd_col1:
+                fwd_months = st.selectbox(
+                    "Forward Start",
+                    options=[0, 3, 6, 12],
+                    format_func=lambda x: "Spot" if x == 0 else f"{x}M Forward",
+                    key="fwd_months_select",
+                )
+                target_tenor = st.selectbox(
+                    "Target Tenor",
+                    options=[2.0, 3.0, 5.0, 7.0, 10.0],
+                    format_func=lambda x: f"{int(x)}Y",
+                    key="target_tenor_select",
+                    index=2,
+                )
+
+            with fwd_col2:
+                fwd_rates_data = []
+                for ccy in ["USD", "EUR", "AUD", "CNH"]:
+                    rate = get_interpolated_rate(ccy, target_tenor, fwd_months / 12, method="cubic")
+                    if rate is not None:
+                        fwd_rates_data.append({
+                            "币种": ccy,
+                            f"{int(target_tenor)}Y @ {'Spot' if fwd_months == 0 else str(fwd_months) + 'M Fwd'} (%)": f"{rate:.2f}",
+                        })
+
+                if fwd_rates_data:
+                    st.dataframe(pd.DataFrame(fwd_rates_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("Forward rate data not available.")
+
+        # =====================================================================
+        # STEP 4: 投资计划汇总
+        # =====================================================================
+        st.markdown("---")
+        st.subheader("📋 Step 4: 投资计划汇总")
+
+        st.markdown("最终配置结果总览。")
+
+        # Summary metrics
+        total_mat_yi = sum(mm_to_yi(p.total_maturing_2026) for p in profiles.values())
+        total_reinv_yi = sum(mm_to_yi(p.total_planned_investment) for p in profiles.values())
+        total_add_yi = sum(mm_to_yi(p.total_additional_investment) for p in profiles.values())
+        total_deploy_yi = total_reinv_yi + total_add_yi
+        gap_yi = total_mat_yi - total_deploy_yi
+
+        # Key metrics row
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("2026总到期", f"{total_mat_yi:.2f}亿美元")
+        with m2:
+            st.metric("到期再投", f"{total_reinv_yi:.2f}亿美元")
+        with m3:
+            st.metric("追加投资", f"{total_add_yi:.2f}亿美元", delta=f"+{total_add_yi:.2f}" if total_add_yi > 0 else None)
+        with m4:
+            delta_color = "inverse" if gap_yi > 0 else "normal"
+            st.metric("资金缺口", f"{gap_yi:.2f}亿美元", delta=f"{-gap_yi:.2f}" if gap_yi != 0 else "0", delta_color=delta_color)
+
+        # Cashflow waterfall charts
+        st.markdown("**净现金流分析**")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -1248,29 +1298,33 @@ def render_main_content(settings: dict[str, Any]) -> None:
                 fig_cf2 = create_cashflow_waterfall(aud_profile)
                 st.plotly_chart(fig_cf2, use_container_width=True)
 
-        # Note: Quick allocation buttons moved to sticky header at top of page
-        st.markdown("---")
-        st.info("💡 **快捷配置策略** 已移至页面顶部导航栏，全局同步所有组件。")
+        # Final summary table
+        st.markdown("**配置明细汇总表**")
+        final_summary_records = []
+        for key, p in profiles.items():
+            total_mat = mm_to_yi(p.total_maturing_2026)
+            total_reinv = mm_to_yi(p.total_planned_investment)
+            total_add = mm_to_yi(p.total_additional_investment)
+            total_deploy = total_reinv + total_add
+            gap = total_mat - total_deploy
+            coverage = (total_deploy / total_mat * 100) if total_mat > 0 else 0
 
-        # Summary metrics
-        st.markdown("---")
-        st.subheader("投资计划汇总")
+            final_summary_records.append({
+                "组合": p.name,
+                "币种": p.currency.value,
+                "到期(亿)": f"{total_mat:.2f}",
+                "再投(亿)": f"{total_reinv:.2f}",
+                "追加(亿)": f"{total_add:.2f}",
+                "总投放(亿)": f"{total_deploy:.2f}",
+                "缺口(亿)": f"{gap:.2f}",
+                "覆盖率": f"{coverage:.1f}%",
+            })
 
-        total_mat_yi = sum(mm_to_yi(p.total_maturing_2026) for p in profiles.values())
-        total_reinv_yi = sum(mm_to_yi(p.total_planned_investment) for p in profiles.values())
-        total_add_yi = sum(mm_to_yi(p.total_additional_investment) for p in profiles.values())
-        total_deploy_yi = total_reinv_yi + total_add_yi
+        final_df = pd.DataFrame(final_summary_records)
+        st.dataframe(final_df, use_container_width=True, hide_index=True)
 
-        m1, m2, m3, m4 = st.columns(4)
-        with m1:
-            st.metric("2026总到期", f"{total_mat_yi:.2f}亿美元")
-        with m2:
-            st.metric("到期再投", f"{total_reinv_yi:.2f}亿美元")
-        with m3:
-            st.metric("追加投资", f"{total_add_yi:.2f}亿美元", delta=f"+{total_add_yi:.2f}" if total_add_yi > 0 else None)
-        with m4:
-            gap = total_mat_yi - total_deploy_yi
-            st.metric("资金缺口", f"{gap:.2f}亿美元", delta=f"{-gap:.2f}" if gap != 0 else "0", delta_color="inverse")
+        # Strategy confirmation
+        st.success(f"✅ 当前策略: **{st.session_state.active_strategy}** | 总投放: **{total_deploy_yi:.2f}亿美元** | 覆盖率: **{(total_deploy_yi/total_mat_yi*100) if total_mat_yi > 0 else 0:.1f}%**")
 
     # === Tab 3: Simulation ===
     with tab3:

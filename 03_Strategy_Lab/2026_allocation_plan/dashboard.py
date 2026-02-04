@@ -42,6 +42,11 @@ from allocation_engine import (
     AllocationStrategy,
     SimulationResult,
 )
+from forward_rate_data import (
+    ForwardRateSurface,
+    get_forward_surface,
+    FORWARD_SURFACES,
+)
 
 
 # ============================================================================
@@ -134,6 +139,50 @@ def create_surface_plot(
             zaxis=dict(title=dict(text="Yield (%)", font=dict(size=14))),
             camera=dict(
                 eye=dict(x=1.5, y=-1.5, z=0.8),
+            ),
+        ),
+        margin=dict(l=0, r=0, b=0, t=40),
+        height=600,
+    )
+
+    return fig
+
+
+def create_real_forward_surface_plot(
+    surface: ForwardRateSurface,
+    title: str = "Forward Rate Surface",
+) -> go.Figure:
+    """Create 3D surface plot from real forward rate data."""
+    # Create meshgrid for plotting
+    tenors = surface.tenors_years
+    forwards = surface.forwards_years
+
+    fig = go.Figure(data=[
+        go.Surface(
+            x=forwards,          # X = Forward Start
+            y=tenors,            # Y = Tenor (Maturity)
+            z=surface.rates,     # Z = Rate (already in %)
+            colorscale="Viridis",
+            colorbar=dict(
+                title=dict(text="Yield (%)", side="right"),
+            ),
+            hovertemplate=(
+                "Forward: %{x:.2f}Y<br>"
+                "Tenor: %{y:.2f}Y<br>"
+                "Rate: %{z:.2f}%<br>"
+                "<extra></extra>"
+            ),
+        )
+    ])
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=20)),
+        scene=dict(
+            xaxis=dict(title=dict(text="Forward Start (Years)", font=dict(size=14))),
+            yaxis=dict(title=dict(text="Tenor (Years)", font=dict(size=14))),
+            zaxis=dict(title=dict(text="Yield (%)", font=dict(size=14))),
+            camera=dict(
+                eye=dict(x=1.8, y=-1.8, z=0.8),
             ),
         ),
         margin=dict(l=0, r=0, b=0, t=40),
@@ -394,51 +443,99 @@ def render_main_content(settings: dict[str, Any]) -> None:
     with tab1:
         st.header("3D Yield Surface Visualization")
 
-        col1, col2 = st.columns([2, 1])
+        # Data source toggle
+        data_source = st.radio(
+            "Data Source",
+            ["Market Data (Real)", "NSS Model (Synthetic)"],
+            horizontal=True,
+        )
 
-        with col1:
-            # Generate and plot surface
-            fwd, tnr, ylds = generate_yield_surface_data(
-                settings["beta0"],
-                settings["beta1"],
-                settings["beta2"],
-                settings["beta3"],
-                settings["lambda1"],
-                settings["lambda2"],
-            )
+        if data_source == "Market Data (Real)":
+            # === Real Forward Rate Surface ===
+            ccy_str = settings["currency"].value
+            real_surface = get_forward_surface(ccy_str)
 
-            fig = create_surface_plot(fwd, tnr, ylds, f"{settings['currency'].value} Yield Surface")
-            st.plotly_chart(fig, use_container_width=True)
+            if real_surface is not None:
+                col1, col2 = st.columns([2, 1])
 
-        with col2:
-            st.subheader("Current Parameters")
-            st.json({
-                "β₀ (Level)": f"{settings['beta0']:.3f}",
-                "β₁ (Slope)": f"{settings['beta1']:.3f}",
-                "β₂ (Curvature)": f"{settings['beta2']:.3f}",
-                "β₃ (Hump 2)": f"{settings['beta3']:.3f}",
-                "λ₁": f"{settings['lambda1']:.1f}",
-                "λ₂": f"{settings['lambda2']:.1f}",
-            })
+                with col1:
+                    fig = create_real_forward_surface_plot(
+                        real_surface,
+                        f"{ccy_str} Forward Rate Surface (as of {real_surface.as_of_date})",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-            st.subheader("Key Rates")
-            nss = NelsonSiegelSvensson(
-                settings["beta0"],
-                settings["beta1"],
-                settings["beta2"],
-                settings["beta3"],
-                settings["lambda1"],
-                settings["lambda2"],
-            )
-            key_tenors = [0.25, 1.0, 2.0, 5.0, 10.0]
-            rates = nss.yield_at_tenor(np.array(key_tenors)) * 100
+                with col2:
+                    st.subheader("Surface Info")
+                    st.markdown(f"""
+                    - **Currency**: {real_surface.currency}
+                    - **As of**: {real_surface.as_of_date}
+                    - **Tenors**: {len(real_surface.tenor_labels)} points
+                    - **Forwards**: {len(real_surface.forward_labels)} points
+                    """)
 
-            for t, r in zip(key_tenors, rates):
-                label = f"{int(t*12)}M" if t < 1 else f"{int(t)}Y"
-                st.metric(label, f"{r:.2f}%")
+                    st.subheader("Spot Curve (Key Rates)")
+                    df_spot = real_surface.to_dataframe()[["Spot"]].rename(columns={"Spot": "Yield (%)"})
+                    st.dataframe(df_spot, use_container_width=True)
 
-        # Curve comparison
-        st.subheader("Multi-Currency Comparison")
+                # Full forward rate matrix
+                st.subheader("Forward Rate Matrix (%)")
+                st.dataframe(
+                    real_surface.to_dataframe().style.format("{:.2f}").background_gradient(cmap="YlOrRd"),
+                    use_container_width=True,
+                )
+
+            else:
+                st.warning(f"No market data available for {ccy_str}. Available: {list(FORWARD_SURFACES.keys())}")
+
+        else:
+            # === NSS Synthetic Surface ===
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                # Generate and plot surface
+                fwd, tnr, ylds = generate_yield_surface_data(
+                    settings["beta0"],
+                    settings["beta1"],
+                    settings["beta2"],
+                    settings["beta3"],
+                    settings["lambda1"],
+                    settings["lambda2"],
+                )
+
+                fig = create_surface_plot(fwd, tnr, ylds, f"{settings['currency'].value} Yield Surface (NSS)")
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col2:
+                st.subheader("NSS Parameters")
+                st.json({
+                    "β₀ (Level)": f"{settings['beta0']:.3f}",
+                    "β₁ (Slope)": f"{settings['beta1']:.3f}",
+                    "β₂ (Curvature)": f"{settings['beta2']:.3f}",
+                    "β₃ (Hump 2)": f"{settings['beta3']:.3f}",
+                    "λ₁": f"{settings['lambda1']:.1f}",
+                    "λ₂": f"{settings['lambda2']:.1f}",
+                })
+
+                st.subheader("Key Rates")
+                nss = NelsonSiegelSvensson(
+                    settings["beta0"],
+                    settings["beta1"],
+                    settings["beta2"],
+                    settings["beta3"],
+                    settings["lambda1"],
+                    settings["lambda2"],
+                )
+                key_tenors = [0.25, 1.0, 2.0, 5.0, 10.0]
+                rates = nss.yield_at_tenor(np.array(key_tenors)) * 100
+
+                for t, r in zip(key_tenors, rates):
+                    label = f"{int(t*12)}M" if t < 1 else f"{int(t)}Y"
+                    st.metric(label, f"{r:.2f}%")
+
+        # Curve comparison (always shown)
+        st.markdown("---")
+        st.subheader("Multi-Currency Spot Curve Comparison")
         params_list = [
             (ccy.value, params)
             for ccy, params in DEFAULT_NSS_PARAMS.items()

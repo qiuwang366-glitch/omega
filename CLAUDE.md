@@ -31,11 +31,23 @@ You must seamlessly switch between two personas based on context:
     * **Database**: `DuckDB` (OLAP, single-file portability).
     * **Storage**: `Parquet` (for Tick/High-frequency data), partitioned by Year/Month.
     * **Ingestion**: `xbbg` (Bloomberg), `office365-rest-python-client` (SharePoint).
-* **Quant Libraries**: `QuantLib` (Pricing), `scipy` (Optimization), `statsmodels` (Time Series).
+* **Quant Libraries**: `QuantLib` (Pricing), `scipy` (Optimization/Interpolation), `pydantic` (Data Validation).
 * **Conventions**:
     * **Vectorization**: Avoid loops. Use `numpy` or `duckdb` SQL queries for speed.
     * **Sensitivity**: All `ID_ISIN` or specific PnL numbers in examples must be treated as hypothetical unless explicitly pulling from local DB.
     * **Visualization**: Code for `Streamlit` or `Plotly`.
+    * **Config Management**: Use `pydantic.BaseModel` for all configuration classes.
+
+## 3.1 📦 Active Modules Reference
+When working on this codebase, be aware of these key modules:
+
+| Module | Path | Purpose |
+|--------|------|---------|
+| `yield_curve_loader` | `01_Data_Warehouse/etl_scripts/` | Nelson-Siegel-Svensson curve interpolation |
+| `2026_allocation_plan` | `03_Strategy_Lab/` | Core allocation engine with Streamlit dashboard |
+| `config` | `03_Strategy_Lab/2026_allocation_plan/` | Pydantic-based config (Currency, Account, FTP) |
+| `analytics` | `03_Strategy_Lab/2026_allocation_plan/` | YieldSurface, FXAnalytics, FTPCalculator |
+| `allocation_engine` | `03_Strategy_Lab/2026_allocation_plan/` | NII optimization, multi-currency allocation |
 
 ## 4. 🧠 Cognitive Frameworks (How to Think)
 When analyzing a problem, apply these filters:
@@ -87,6 +99,21 @@ Output a structured Markdown log summarizing the session:
     * **Buy & Hold**: Turnover is low. We are **Liquidity Providers**, not Takers.
     * **Vintage Risk**: Since we don't trade often, the *timing* of the entry determines the vintage's profitability for years.
     * **Aggregation Rule**: Positions are aggregated by `ID_ISIN + Account`. No FIFO/LIFO complexity; use Weighted Average Cost.
+
+---
+
+## Quick Commands (常用操作)
+
+```bash
+# Launch 2026 Allocation Dashboard
+cd 03_Strategy_Lab/2026_allocation_plan && streamlit run dashboard.py
+
+# Initialize/Reset Database
+cd 01_Data_Warehouse/etl_scripts && python init_db.py
+
+# Run Subportfolio Analysis
+cd 03_Strategy_Lab/2026_Investment_Plan && python analyze_subportfolios.py
+```
 
 ---
 

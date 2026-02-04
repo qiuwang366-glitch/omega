@@ -115,8 +115,7 @@ def create_surface_plot(
             z=yields,           # Z = Yield
             colorscale="Viridis",
             colorbar=dict(
-                title="Yield (%)",
-                titleside="right",
+                title=dict(text="Yield (%)", side="right"),
             ),
             hovertemplate=(
                 "Tenor: %{x:.1f}Y<br>"

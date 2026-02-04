@@ -55,6 +55,42 @@ from forward_rate_data import (
     FORWARD_SURFACES,
 )
 
+# New premium visualization and position data modules
+try:
+    from visualizations import (
+        ColorScheme,
+        get_premium_layout,
+        get_premium_css,
+        create_maturity_waterfall,
+        create_maturity_heatmap,
+        create_maturity_sunburst,
+        create_duration_profile_chart,
+        create_key_rate_duration_chart,
+        create_currency_donut,
+        create_rolldown_chart,
+        create_forward_curve_comparison,
+        create_concentration_treemap,
+        create_premium_3d_surface,
+        PREMIUM_CSS,
+    )
+    from position_loader import (
+        load_position_data,
+        get_position_summary,
+        get_maturity_by_year,
+        get_maturity_schedule_monthly,
+        get_bonds_maturing_in_year,
+        get_maturity_concentration,
+        get_duration_profile_by_maturity,
+        calculate_key_rate_durations,
+        get_currency_breakdown,
+        get_maturity_by_currency_year,
+        get_category_breakdown,
+    )
+    PREMIUM_MODULES_AVAILABLE = True
+except ImportError as e:
+    PREMIUM_MODULES_AVAILABLE = False
+    print(f"Premium modules not available: {e}")
+
 
 # ============================================================================
 # 1. Page Configuration
@@ -68,12 +104,35 @@ st.set_page_config(
 
 
 # ============================================================================
+# 1.5 Premium Styling (Applied after page config)
+# ============================================================================
+if PREMIUM_MODULES_AVAILABLE:
+    st.markdown(get_premium_css(), unsafe_allow_html=True)
+
+
+# ============================================================================
 # 2. Session State Initialization
 # ============================================================================
+@st.cache_data(ttl=600)
+def load_cached_position_data():
+    """Load and cache position data."""
+    if PREMIUM_MODULES_AVAILABLE:
+        try:
+            return load_position_data()
+        except Exception as e:
+            st.warning(f"Could not load position data: {e}")
+            return None
+    return None
+
+
 def init_session_state() -> None:
     """Initialize session state variables."""
     if "config" not in st.session_state:
         st.session_state.config = get_default_config()
+
+    # Load position data for maturity analysis
+    if "position_data" not in st.session_state:
+        st.session_state.position_data = load_cached_position_data()
 
     if "simulation_result" not in st.session_state:
         st.session_state.simulation_result = None
@@ -884,6 +943,323 @@ def render_sticky_header() -> str | None:
     return selected_strategy
 
 
+def render_portfolio_overview_tab() -> None:
+    """
+    Render the Portfolio Overview tab with maturity analysis and bond details.
+
+    Features:
+    - Position summary metrics
+    - Maturity distribution by year
+    - Maturity heatmap by currency
+    - 2026 maturing bonds detail
+    - Duration profile analysis
+    - Concentration risk analysis
+    """
+    st.header("Portfolio Overview & Maturity Analysis")
+
+    if not PREMIUM_MODULES_AVAILABLE:
+        st.warning("Premium visualization modules not available. Please ensure visualizations.py and position_loader.py are in the same directory.")
+        return
+
+    position_df = st.session_state.position_data
+    if position_df is None or position_df.empty:
+        st.warning("Position data not available. Ensure position20251231.csv exists in 01_Data_Warehouse/raw_landing/")
+        return
+
+    # =========================================================================
+    # Section 1: Key Portfolio Metrics
+    # =========================================================================
+    st.markdown("### 📊 Portfolio Snapshot")
+
+    summary = get_position_summary(position_df)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    with m1:
+        st.metric(
+            "Total Positions",
+            f"{summary['total_positions']:,}",
+            help="Number of unique bond positions"
+        )
+    with m2:
+        st.metric(
+            "Total AUM",
+            f"{summary['total_nominal_yi']:.1f}亿美元",
+            help="Total nominal value in 亿美元"
+        )
+    with m3:
+        st.metric(
+            "Avg Duration",
+            f"{summary['avg_duration']:.2f}Y",
+            help="Portfolio weighted average duration"
+        )
+    with m4:
+        st.metric(
+            "Currencies",
+            f"{summary['unique_currencies']}",
+            help=", ".join(summary['currencies'][:5])
+        )
+    with m5:
+        if summary['avg_yield']:
+            st.metric(
+                "Avg Yield",
+                f"{summary['avg_yield']:.2f}%",
+                help="Weighted average yield"
+            )
+        else:
+            st.metric("Avg Yield", "N/A")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 2: Maturity Distribution by Year
+    # =========================================================================
+    st.markdown("### 📅 Maturity Distribution by Year")
+
+    col_chart, col_table = st.columns([2, 1])
+
+    with col_chart:
+        yearly_maturity = get_maturity_by_year(position_df, 2025, 2040)
+        if not yearly_maturity.empty:
+            yearly_maturity["NominalYi"] = yearly_maturity["NominalUSD"] / 100_000_000
+            fig_maturity = create_maturity_waterfall(
+                yearly_maturity,
+                value_col="NominalYi",
+                label_col="MaturityYear",
+                title="Maturity Wall: Annual Distribution"
+            )
+            st.plotly_chart(fig_maturity, use_container_width=True)
+        else:
+            st.info("No maturity data available")
+
+    with col_table:
+        st.markdown("**Annual Breakdown**")
+        if not yearly_maturity.empty:
+            display_df = yearly_maturity[["MaturityYear", "NominalYi", "PositionCount"]].copy()
+            display_df.columns = ["Year", "Nominal (亿)", "# Bonds"]
+            display_df["Year"] = display_df["Year"].astype(int)
+            display_df["Nominal (亿)"] = display_df["Nominal (亿)"].round(2)
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 3: Maturity by Currency × Year Heatmap
+    # =========================================================================
+    st.markdown("### 🌍 Maturity by Currency & Year")
+
+    ccy_year_pivot = get_maturity_by_currency_year(position_df, 2025, 2035)
+    if not ccy_year_pivot.empty:
+        fig_heatmap = create_maturity_heatmap(ccy_year_pivot, title="Maturity Distribution: Currency × Year")
+        st.plotly_chart(fig_heatmap, use_container_width=True)
+    else:
+        st.info("No currency-year maturity data available")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 4: 2026 Maturing Bonds Detail
+    # =========================================================================
+    st.markdown("### 🔍 2026年到期债券明细")
+
+    # Year selector
+    col_year, col_ccy, col_empty = st.columns([1, 1, 3])
+    with col_year:
+        selected_year = st.selectbox(
+            "Select Year",
+            options=list(range(2025, 2036)),
+            index=1,  # Default to 2026
+            key="maturity_year_select"
+        )
+    with col_ccy:
+        currencies = ["All"] + sorted(position_df["CCY"].dropna().unique().tolist())
+        selected_ccy = st.selectbox(
+            "Currency Filter",
+            options=currencies,
+            index=0,
+            key="maturity_ccy_select"
+        )
+
+    # Get maturing bonds
+    ccy_filter = None if selected_ccy == "All" else selected_ccy
+    maturing_bonds = get_bonds_maturing_in_year(position_df, selected_year, ccy_filter)
+
+    if not maturing_bonds.empty:
+        # Summary metrics for selected year
+        total_maturing_yi = maturing_bonds["NominalYi"].sum() if "NominalYi" in maturing_bonds.columns else maturing_bonds["NominalUSD"].sum() / 100_000_000
+        bond_count = len(maturing_bonds)
+
+        sm1, sm2, sm3 = st.columns(3)
+        with sm1:
+            st.metric(f"{selected_year}年到期总额", f"{total_maturing_yi:.2f}亿美元")
+        with sm2:
+            st.metric("到期债券数量", f"{bond_count}只")
+        with sm3:
+            avg_dur = maturing_bonds["Duration"].mean() if "Duration" in maturing_bonds.columns else 0
+            st.metric("平均久期", f"{avg_dur:.2f}Y")
+
+        # Detailed table
+        st.markdown(f"**{selected_year}年到期债券列表** ({selected_ccy if selected_ccy != 'All' else '所有币种'})")
+
+        # Format display columns
+        display_cols = ["ISIN", "BondName", "CCY", "NominalYi", "Duration", "Yield", "MaturityDate", "Category1"]
+        available_cols = [c for c in display_cols if c in maturing_bonds.columns]
+        display_df = maturing_bonds[available_cols].copy()
+
+        # Rename for display
+        col_rename = {
+            "ISIN": "ISIN",
+            "BondName": "Bond Name",
+            "CCY": "Currency",
+            "NominalYi": "Nominal (亿)",
+            "Duration": "Duration",
+            "Yield": "Yield (%)",
+            "MaturityDate": "Maturity",
+            "Category1": "Category",
+        }
+        display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+
+        # Format numeric columns
+        if "Nominal (亿)" in display_df.columns:
+            display_df["Nominal (亿)"] = display_df["Nominal (亿)"].round(4)
+        if "Duration" in display_df.columns:
+            display_df["Duration"] = display_df["Duration"].round(2)
+        if "Yield (%)" in display_df.columns:
+            display_df["Yield (%)"] = display_df["Yield (%)"].round(4)
+
+        st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
+
+        # Download button
+        csv = maturing_bonds.to_csv(index=False)
+        st.download_button(
+            label=f"📥 Download {selected_year} Maturing Bonds (CSV)",
+            data=csv,
+            file_name=f"maturing_bonds_{selected_year}_{selected_ccy}.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info(f"No bonds maturing in {selected_year}" + (f" for {selected_ccy}" if selected_ccy != "All" else ""))
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 5: Duration Profile by Maturity Bucket
+    # =========================================================================
+    st.markdown("### 📐 Duration Profile by Maturity Bucket")
+
+    col_dur_chart, col_dur_table = st.columns([2, 1])
+
+    duration_profile = get_duration_profile_by_maturity(position_df)
+    if not duration_profile.empty:
+        with col_dur_chart:
+            fig_duration = create_duration_profile_chart(
+                duration_profile,
+                title="Duration Contribution by Maturity Bucket"
+            )
+            st.plotly_chart(fig_duration, use_container_width=True)
+
+        with col_dur_table:
+            st.markdown("**Bucket Analysis**")
+            display_dur = duration_profile[["Bucket", "NominalYi", "AvgDuration", "WeightPct"]].copy()
+            display_dur.columns = ["Bucket", "Nominal (亿)", "Avg Dur", "Weight %"]
+            display_dur["Nominal (亿)"] = display_dur["Nominal (亿)"].round(2)
+            display_dur["Avg Dur"] = display_dur["Avg Dur"].round(2)
+            display_dur["Weight %"] = display_dur["Weight %"].round(1)
+            st.dataframe(display_dur, use_container_width=True, hide_index=True)
+    else:
+        st.info("No duration profile data available")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 6: Currency Breakdown
+    # =========================================================================
+    st.markdown("### 💱 Currency Breakdown")
+
+    col_donut, col_ccy_table = st.columns([1, 1])
+
+    currency_breakdown = get_currency_breakdown(position_df)
+    if not currency_breakdown.empty:
+        with col_donut:
+            fig_donut = create_currency_donut(currency_breakdown, title="Portfolio by Currency")
+            st.plotly_chart(fig_donut, use_container_width=True)
+
+        with col_ccy_table:
+            st.markdown("**Currency Details**")
+            display_ccy = currency_breakdown[["CCY", "NominalYi", "PositionCount", "WeightPct"]].copy()
+            display_ccy.columns = ["Currency", "Nominal (亿)", "# Positions", "Weight %"]
+            display_ccy["Nominal (亿)"] = display_ccy["Nominal (亿)"].round(2)
+            display_ccy["Weight %"] = display_ccy["Weight %"].round(1)
+            st.dataframe(display_ccy, use_container_width=True, hide_index=True)
+    else:
+        st.info("No currency breakdown data available")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 7: Maturity Concentration Risk
+    # =========================================================================
+    st.markdown("### ⚠️ Maturity Concentration Risk")
+
+    concentration = get_maturity_concentration(position_df, top_n=10)
+    if not concentration.empty:
+        st.markdown("**Top 10 Concentration Dates** - Largest single-day maturity amounts")
+
+        display_conc = concentration[["MaturityDate", "NominalYi", "PositionCount", "SampleBonds"]].copy()
+        display_conc.columns = ["Maturity Date", "Nominal (亿)", "# Bonds", "Sample Bonds"]
+        display_conc["Nominal (亿)"] = display_conc["Nominal (亿)"].round(2)
+        st.dataframe(display_conc, use_container_width=True, hide_index=True)
+    else:
+        st.info("No concentration data available")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # Section 8: Category/Sector Breakdown
+    # =========================================================================
+    st.markdown("### 🏷️ Asset Category Breakdown")
+
+    category_breakdown = get_category_breakdown(position_df, "Category1")
+    if not category_breakdown.empty:
+        col_cat1, col_cat2 = st.columns(2)
+
+        with col_cat1:
+            # Horizontal bar chart for categories
+            colors = ColorScheme.DARK
+            cat_colors = ColorScheme.CATEGORY_COLORS
+
+            fig_cat = go.Figure()
+            fig_cat.add_trace(go.Bar(
+                y=category_breakdown["Category1"],
+                x=category_breakdown["NominalYi"],
+                orientation="h",
+                marker=dict(
+                    color=[cat_colors.get(c, colors["accent_blue"]) for c in category_breakdown["Category1"]],
+                    line=dict(width=0.5, color=colors["text_secondary"]),
+                ),
+                text=[f"{v:.1f}亿" for v in category_breakdown["NominalYi"]],
+                textposition="auto",
+                hovertemplate="<b>%{y}</b><br>%{x:.2f}亿美元<extra></extra>",
+            ))
+
+            layout = get_premium_layout("By Asset Category", height=350)
+            layout.update({
+                "xaxis": {**layout["xaxis"], "title": {"text": "Nominal (亿美元)"}},
+                "yaxis": {**layout["yaxis"], "title": None},
+            })
+            fig_cat.update_layout(**layout)
+            st.plotly_chart(fig_cat, use_container_width=True)
+
+        with col_cat2:
+            st.markdown("**Category Details**")
+            display_cat = category_breakdown[["Category1", "NominalYi", "PositionCount", "WeightPct"]].copy()
+            display_cat.columns = ["Category", "Nominal (亿)", "# Positions", "Weight %"]
+            display_cat["Nominal (亿)"] = display_cat["Nominal (亿)"].round(2)
+            display_cat["Weight %"] = display_cat["Weight %"].round(1)
+            st.dataframe(display_cat, use_container_width=True, hide_index=True)
+    else:
+        st.info("No category breakdown data available")
+
+
 def render_main_content(settings: dict[str, Any]) -> None:
     """Render main dashboard content."""
 
@@ -895,13 +1271,18 @@ def render_main_content(settings: dict[str, Any]) -> None:
     )
 
     # === Tabs ===
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🏦 Portfolio Overview",
         "📈 Yield Surface",
         "🎯 2026 Allocation",
         "💹 Simulation",
         "📊 FTP Analysis",
         "📋 Reports",
     ])
+
+    # === Tab 0: Portfolio Overview (NEW) ===
+    with tab0:
+        render_portfolio_overview_tab()
 
     # === Tab 1: Yield Surface ===
     with tab1:
@@ -1006,6 +1387,84 @@ def render_main_content(settings: dict[str, Any]) -> None:
         ]
         fig_comp = create_curve_comparison_plot(params_list)
         st.plotly_chart(fig_comp, use_container_width=True)
+
+        # =====================================================================
+        # Rolldown & Carry Analysis (NEW)
+        # =====================================================================
+        st.markdown("---")
+        st.subheader("📊 Rolldown & Carry Analysis")
+
+        st.markdown("""
+        > **Carry**: Income from holding the bond (coupon/yield).
+        > **Rolldown**: Capital gain from curve roll as bond ages.
+        > **Total Return** = Carry + Rolldown - Financing Cost
+        """)
+
+        if PREMIUM_MODULES_AVAILABLE:
+            ccy_for_rolldown = st.selectbox(
+                "Currency for Analysis",
+                options=["USD", "EUR", "AUD", "CNH"],
+                index=0,
+                key="rolldown_ccy",
+            )
+
+            rolldown_surface = get_forward_surface(ccy_for_rolldown)
+
+            if rolldown_surface is not None:
+                col_roll1, col_roll2 = st.columns(2)
+
+                with col_roll1:
+                    # Forward curve comparison
+                    fig_fwd_comp = create_forward_curve_comparison(
+                        rolldown_surface,
+                        forward_points=[0, 3, 6, 12],
+                        title=f"{ccy_for_rolldown} Forward Curves Comparison"
+                    )
+                    st.plotly_chart(fig_fwd_comp, use_container_width=True)
+
+                with col_roll2:
+                    # Rolldown analysis chart
+                    fig_rolldown = create_rolldown_chart(
+                        rolldown_surface,
+                        entry_tenors=[2, 3, 5, 7, 10],
+                        holding_periods=[0.25, 0.5, 1.0],
+                        title=f"{ccy_for_rolldown} Rolldown Analysis"
+                    )
+                    st.plotly_chart(fig_rolldown, use_container_width=True)
+
+                # Carry vs Rolldown table
+                st.markdown("**Carry + Rolldown Summary by Entry Tenor**")
+
+                entry_tenors = [2, 3, 5, 7, 10]
+                spot_rates = rolldown_surface.rates[:, 0]
+                tenors_years = rolldown_surface.tenors_years
+
+                carry_rolldown_data = []
+                for tenor in entry_tenors:
+                    tenor_idx = min(range(len(tenors_years)), key=lambda i: abs(tenors_years[i] - tenor))
+                    rolled_idx = min(range(len(tenors_years)), key=lambda i: abs(tenors_years[i] - (tenor - 1)))
+
+                    if tenor_idx < len(spot_rates) and rolled_idx < len(spot_rates):
+                        entry_yield = spot_rates[tenor_idx]
+                        exit_yield = spot_rates[rolled_idx]
+                        carry = entry_yield
+                        rolldown = (entry_yield - exit_yield) * min(tenor, 5)  # Approximate
+                        total = carry + rolldown
+
+                        carry_rolldown_data.append({
+                            "Entry Tenor": f"{tenor}Y",
+                            "Carry (%)": f"{carry:.2f}",
+                            "Rolldown (bp, 1Y)": f"{rolldown * 100:.0f}",
+                            "Est. Total Return": f"{total:.2f}%",
+                        })
+
+                if carry_rolldown_data:
+                    st.dataframe(pd.DataFrame(carry_rolldown_data), use_container_width=True, hide_index=True)
+
+            else:
+                st.info(f"Forward surface data not available for {ccy_for_rolldown}")
+        else:
+            st.info("Premium visualization modules required for Rolldown analysis")
 
     # === Tab 2: 2026 Allocation Plan (Step-by-Step Workflow) ===
     with tab2:

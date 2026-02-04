@@ -195,6 +195,110 @@ class PortfolioConfig(BaseModel):
 
 
 # ============================================================================
+# Sub-Portfolio Profile Data (2026 Allocation Plan)
+# ============================================================================
+class SubPortfolioProfile(BaseModel):
+    """
+    Profile for a sub-portfolio including stock position and maturity schedule.
+
+    This captures the reinvestment risk ('maturity wall') and deployment plan.
+    """
+    name: str
+    currency: Currency
+    aum_usd_mm: float = Field(description="AUM in USD millions")
+    n_positions: int = Field(default=0)
+    wtd_avg_yield: float = Field(description="Weighted average yield (decimal)")
+    wtd_avg_duration: float = Field(description="Weighted average duration (years)")
+    annual_carry_usd_mm: float = Field(description="Annual carry in USD millions")
+
+    # Monthly maturity schedule (amount in USD MM)
+    maturity_schedule: dict[str, float] = Field(
+        default_factory=dict,
+        description="Monthly maturities: {'Jan': 100.0, 'Feb': 200.0, ...}"
+    )
+
+    # Exit yields for maturing positions
+    maturity_exit_yields: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Exit yields for maturing positions"
+    )
+
+    # Planned new investment schedule (amount in USD MM)
+    investment_plan: dict[str, float] = Field(
+        default_factory=dict,
+        description="Monthly new investments: {'Jan': 50.0, 'Feb': 100.0, ...}"
+    )
+
+    # Target yields for new investments
+    investment_target_yields: dict[str, float | None] = Field(
+        default_factory=dict,
+        description="Target yields for new investments"
+    )
+
+    @property
+    def total_maturing_2026(self) -> float:
+        return sum(self.maturity_schedule.values())
+
+    @property
+    def total_planned_investment(self) -> float:
+        return sum(self.investment_plan.values())
+
+    @property
+    def maturity_pct_of_aum(self) -> float:
+        return self.total_maturing_2026 / self.aum_usd_mm if self.aum_usd_mm > 0 else 0.0
+
+
+# Default sub-portfolio data based on 2026_Subportfolio_Profile.md
+MONTHS_2026 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+DEFAULT_SUBPORTFOLIOS: dict[str, SubPortfolioProfile] = {
+    "USD_SSA": SubPortfolioProfile(
+        name="USD SSA",
+        currency=Currency.USD,
+        aum_usd_mm=4450.0,
+        n_positions=47,
+        wtd_avg_yield=0.0414,
+        wtd_avg_duration=2.45,
+        annual_carry_usd_mm=184.5,
+        maturity_schedule={
+            "Jan": 0.0, "Feb": 300.0, "Mar": 0.0, "Apr": 276.4,
+            "May": 100.0, "Jun": 40.0, "Jul": 0.0, "Aug": 124.0,
+            "Sep": 50.0, "Oct": 0.0, "Nov": 0.0, "Dec": 0.0,
+        },
+        maturity_exit_yields={
+            "Jan": None, "Feb": 0.0410, "Mar": None, "Apr": 0.0307,
+            "May": 0.0488, "Jun": 0.0162, "Jul": None, "Aug": 0.0405,
+            "Sep": 0.0452, "Oct": None, "Nov": None, "Dec": None,
+        },
+        investment_plan={m: 0.0 for m in MONTHS_2026},  # To be filled by user/optimizer
+        investment_target_yields={m: None for m in MONTHS_2026},
+    ),
+    "AUD_Rates": SubPortfolioProfile(
+        name="AUD Rates",
+        currency=Currency.AUD,
+        aum_usd_mm=6380.0,
+        n_positions=34,
+        wtd_avg_yield=0.0418,
+        wtd_avg_duration=5.74,
+        annual_carry_usd_mm=266.9,
+        maturity_schedule={
+            "Jan": 0.0, "Feb": 107.2, "Mar": 0.0, "Apr": 173.5,
+            "May": 13.6, "Jun": 0.0, "Jul": 0.0, "Aug": 0.0,
+            "Sep": 0.0, "Oct": 0.0, "Nov": 0.0, "Dec": 0.0,
+        },
+        maturity_exit_yields={
+            "Jan": None, "Feb": 0.0360, "Mar": None, "Apr": 0.0369,
+            "May": 0.0404, "Jun": None, "Jul": None, "Aug": None,
+            "Sep": None, "Oct": None, "Nov": None, "Dec": None,
+        },
+        investment_plan={m: 0.0 for m in MONTHS_2026},  # To be filled by user/optimizer
+        investment_target_yields={m: None for m in MONTHS_2026},
+    ),
+}
+
+
+# ============================================================================
 # 6. FTP (Funds Transfer Pricing) Configuration
 # ============================================================================
 class FTPConfig(BaseModel):

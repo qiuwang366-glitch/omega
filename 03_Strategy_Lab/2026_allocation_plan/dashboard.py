@@ -35,6 +35,9 @@ from config import (
     NSSParams,
     DEFAULT_NSS_PARAMS,
     get_default_config,
+    SubPortfolioProfile,
+    DEFAULT_SUBPORTFOLIOS,
+    MONTHS_2026,
 )
 from data_provider import MarketDataFactory, SyntheticMarketData
 from allocation_engine import (
@@ -73,6 +76,13 @@ def init_session_state() -> None:
 
     if "nss_params" not in st.session_state:
         st.session_state.nss_params = DEFAULT_NSS_PARAMS.copy()
+
+    # Sub-portfolio investment plans (user-editable)
+    if "subportfolio_plans" not in st.session_state:
+        st.session_state.subportfolio_plans = {
+            key: profile.model_copy(deep=True)
+            for key, profile in DEFAULT_SUBPORTFOLIOS.items()
+        }
 
 
 init_session_state()
@@ -307,6 +317,147 @@ def create_fx_sensitivity_heatmap(
     return fig
 
 
+def create_maturity_investment_chart(
+    profiles: dict[str, SubPortfolioProfile],
+) -> go.Figure:
+    """Create combined maturity and investment plan bar chart."""
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=["USD SSA", "AUD Rates"],
+        vertical_spacing=0.15,
+        shared_xaxes=True,
+    )
+
+    colors = {
+        "maturity": "#E74C3C",      # Red for maturities (outflow)
+        "investment": "#27AE60",    # Green for investments (inflow)
+    }
+
+    for idx, (key, profile) in enumerate(profiles.items(), start=1):
+        # Maturity bars (negative to show outflow)
+        maturities = [profile.maturity_schedule.get(m, 0.0) for m in MONTHS_2026]
+        investments = [profile.investment_plan.get(m, 0.0) for m in MONTHS_2026]
+
+        # Maturity (shown as negative)
+        fig.add_trace(
+            go.Bar(
+                name=f"{profile.name} Maturity",
+                x=MONTHS_2026,
+                y=[-m for m in maturities],
+                marker_color=colors["maturity"],
+                hovertemplate="Month: %{x}<br>Maturing: $%{customdata:.1f}MM<extra></extra>",
+                customdata=maturities,
+                showlegend=(idx == 1),
+                legendgroup="maturity",
+            ),
+            row=idx, col=1,
+        )
+
+        # Investment (shown as positive)
+        fig.add_trace(
+            go.Bar(
+                name=f"{profile.name} Investment",
+                x=MONTHS_2026,
+                y=investments,
+                marker_color=colors["investment"],
+                hovertemplate="Month: %{x}<br>Investing: $%{y:.1f}MM<extra></extra>",
+                showlegend=(idx == 1),
+                legendgroup="investment",
+            ),
+            row=idx, col=1,
+        )
+
+        # Add zero line
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=idx, col=1)
+
+    fig.update_layout(
+        title=dict(text="2026 Maturity Wall & Investment Plan", font=dict(size=18)),
+        barmode="overlay",
+        height=500,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+        ),
+    )
+
+    fig.update_yaxes(title_text="Amount (USD MM)", row=1, col=1)
+    fig.update_yaxes(title_text="Amount (USD MM)", row=2, col=1)
+    fig.update_xaxes(title_text="Month", row=2, col=1)
+
+    return fig
+
+
+def create_cashflow_waterfall(
+    profile: SubPortfolioProfile,
+) -> go.Figure:
+    """Create waterfall chart showing cumulative cash position."""
+    maturities = [profile.maturity_schedule.get(m, 0.0) for m in MONTHS_2026]
+    investments = [profile.investment_plan.get(m, 0.0) for m in MONTHS_2026]
+
+    # Net cashflow = maturities - investments (positive = cash in hand)
+    net_flows = [m - i for m, i in zip(maturities, investments)]
+    cumulative = np.cumsum(net_flows)
+
+    fig = go.Figure()
+
+    # Net flow bars
+    fig.add_trace(go.Bar(
+        name="Net Cashflow",
+        x=MONTHS_2026,
+        y=net_flows,
+        marker_color=["#27AE60" if x >= 0 else "#E74C3C" for x in net_flows],
+        hovertemplate="Month: %{x}<br>Net Flow: $%{y:.1f}MM<extra></extra>",
+    ))
+
+    # Cumulative line
+    fig.add_trace(go.Scatter(
+        name="Cumulative",
+        x=MONTHS_2026,
+        y=cumulative,
+        mode="lines+markers",
+        line=dict(color="#3498DB", width=3),
+        marker=dict(size=8),
+        hovertemplate="Month: %{x}<br>Cumulative: $%{y:.1f}MM<extra></extra>",
+    ))
+
+    fig.update_layout(
+        title=f"{profile.name}: Net Cashflow & Cumulative Position",
+        xaxis=dict(title="Month"),
+        yaxis=dict(title="Amount (USD MM)"),
+        height=350,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+    )
+
+    return fig
+
+
+def create_subportfolio_summary_table(
+    profiles: dict[str, SubPortfolioProfile],
+) -> pd.DataFrame:
+    """Create summary table for sub-portfolios."""
+    records = []
+    for key, p in profiles.items():
+        total_mat = p.total_maturing_2026
+        total_inv = p.total_planned_investment
+        records.append({
+            "Portfolio": p.name,
+            "Currency": p.currency.value,
+            "AUM ($MM)": f"{p.aum_usd_mm:,.0f}",
+            "Positions": p.n_positions,
+            "Yield (%)": f"{p.wtd_avg_yield * 100:.2f}",
+            "Duration": f"{p.wtd_avg_duration:.2f}",
+            "Carry ($MM)": f"{p.annual_carry_usd_mm:,.1f}",
+            "2026 Maturing ($MM)": f"{total_mat:,.1f}",
+            "Maturity (% AUM)": f"{p.maturity_pct_of_aum * 100:.1f}%",
+            "Planned Investment ($MM)": f"{total_inv:,.1f}",
+            "Net Gap ($MM)": f"{total_mat - total_inv:,.1f}",
+        })
+    return pd.DataFrame(records)
+
+
 # ============================================================================
 # 4. Sidebar Controls
 # ============================================================================
@@ -432,11 +583,12 @@ def render_main_content(settings: dict[str, Any]) -> None:
     )
 
     # === Tabs ===
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📈 Yield Surface",
+        "🎯 2026 Allocation",
         "💹 Simulation",
-        "🎯 FTP Analysis",
-        "📊 Reports",
+        "📊 FTP Analysis",
+        "📋 Reports",
     ])
 
     # === Tab 1: Yield Surface ===
@@ -543,8 +695,123 @@ def render_main_content(settings: dict[str, Any]) -> None:
         fig_comp = create_curve_comparison_plot(params_list)
         st.plotly_chart(fig_comp, use_container_width=True)
 
-    # === Tab 2: Simulation ===
+    # === Tab 2: 2026 Allocation Plan ===
     with tab2:
+        st.header("2026 Sub-Portfolio Allocation Plan")
+
+        st.markdown("""
+        > **Reinvestment Risk**: Track maturity wall and plan new deployments.
+        > Edit the investment plan below to model different deployment strategies.
+        """)
+
+        # Get current plans from session state
+        profiles = st.session_state.subportfolio_plans
+
+        # Summary table
+        st.subheader("Sub-Portfolio Summary")
+        summary_df = create_subportfolio_summary_table(profiles)
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+        # Main visualization
+        st.subheader("Maturity Wall & Investment Plan")
+        fig_maturity = create_maturity_investment_chart(profiles)
+        st.plotly_chart(fig_maturity, use_container_width=True)
+
+        # Editable investment plan
+        st.subheader("Edit Investment Plan")
+
+        for key, profile in profiles.items():
+            with st.expander(f"📌 {profile.name} ({profile.currency.value})", expanded=True):
+                st.markdown(f"""
+                **Current Position**: ${profile.aum_usd_mm:,.0f}MM AUM |
+                **2026 Maturities**: ${profile.total_maturing_2026:,.1f}MM ({profile.maturity_pct_of_aum*100:.1f}% of AUM)
+                """)
+
+                # Investment input grid
+                cols = st.columns(6)
+                updated_plan = profile.investment_plan.copy()
+
+                for i, month in enumerate(MONTHS_2026):
+                    col_idx = i % 6
+                    maturity_amt = profile.maturity_schedule.get(month, 0.0)
+                    current_inv = profile.investment_plan.get(month, 0.0)
+
+                    with cols[col_idx]:
+                        # Show maturity amount as reference
+                        if maturity_amt > 0:
+                            st.caption(f"{month}: Mat ${maturity_amt:.0f}MM")
+                        else:
+                            st.caption(f"{month}")
+
+                        new_val = st.number_input(
+                            f"Invest ({month})",
+                            min_value=0.0,
+                            max_value=1000.0,
+                            value=float(current_inv),
+                            step=10.0,
+                            key=f"inv_{key}_{month}",
+                            label_visibility="collapsed",
+                        )
+                        updated_plan[month] = new_val
+
+                    # Reset to next row after 6 months
+                    if col_idx == 5 and i < 11:
+                        cols = st.columns(6)
+
+                # Update session state
+                profile.investment_plan = updated_plan
+                st.session_state.subportfolio_plans[key] = profile
+
+        # Cashflow analysis
+        st.subheader("Net Cashflow Analysis")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            usd_profile = profiles.get("USD_SSA")
+            if usd_profile:
+                fig_cf1 = create_cashflow_waterfall(usd_profile)
+                st.plotly_chart(fig_cf1, use_container_width=True)
+
+        with col2:
+            aud_profile = profiles.get("AUD_Rates")
+            if aud_profile:
+                fig_cf2 = create_cashflow_waterfall(aud_profile)
+                st.plotly_chart(fig_cf2, use_container_width=True)
+
+        # Quick allocation buttons
+        st.markdown("---")
+        st.subheader("Quick Allocation Strategies")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            if st.button("🔄 Match Maturities", help="Set investment = maturity each month"):
+                for key, profile in profiles.items():
+                    profile.investment_plan = profile.maturity_schedule.copy()
+                    st.session_state.subportfolio_plans[key] = profile
+                st.rerun()
+
+        with col2:
+            if st.button("⚡ Front-Load Q1", help="Deploy all in Jan-Mar"):
+                for key, profile in profiles.items():
+                    total = profile.total_maturing_2026
+                    profile.investment_plan = {m: 0.0 for m in MONTHS_2026}
+                    profile.investment_plan["Jan"] = total * 0.4
+                    profile.investment_plan["Feb"] = total * 0.35
+                    profile.investment_plan["Mar"] = total * 0.25
+                    st.session_state.subportfolio_plans[key] = profile
+                st.rerun()
+
+        with col3:
+            if st.button("📅 Even Monthly", help="Spread evenly across 12 months"):
+                for key, profile in profiles.items():
+                    monthly = profile.total_maturing_2026 / 12
+                    profile.investment_plan = {m: monthly for m in MONTHS_2026}
+                    st.session_state.subportfolio_plans[key] = profile
+                st.rerun()
+
+    # === Tab 3: Simulation ===
+    with tab3:
         st.header("Allocation Simulation")
 
         if settings["run_simulation"]:
@@ -628,8 +895,8 @@ def render_main_content(settings: dict[str, Any]) -> None:
         else:
             st.info("👈 Configure settings in the sidebar and click **Run Simulation**")
 
-    # === Tab 3: FTP Analysis ===
-    with tab3:
+    # === Tab 4: FTP Analysis ===
+    with tab4:
         st.header("FTP Arbitrage Analysis")
 
         st.markdown("""
@@ -685,8 +952,8 @@ def render_main_content(settings: dict[str, Any]) -> None:
             )
             st.plotly_chart(fig_fx, use_container_width=True)
 
-    # === Tab 4: Reports ===
-    with tab4:
+    # === Tab 5: Reports ===
+    with tab5:
         st.header("Export & Reports")
 
         if st.session_state.simulation_result is not None:

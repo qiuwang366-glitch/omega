@@ -223,10 +223,18 @@ class SubPortfolioProfile(BaseModel):
         description="Exit yields for maturing positions"
     )
 
-    # Planned new investment schedule (amount in USD MM)
+    # Planned reinvestment schedule for maturing funds (amount in USD MM)
+    # 到期再投资计划
     investment_plan: dict[str, float] = Field(
         default_factory=dict,
-        description="Monthly new investments: {'Jan': 50.0, 'Feb': 100.0, ...}"
+        description="Monthly reinvestments: {'Jan': 50.0, 'Feb': 100.0, ...}"
+    )
+
+    # Additional new investment schedule (amount in USD MM)
+    # 追加投资计划 - 新增资金，非到期再投
+    additional_investment: dict[str, float] = Field(
+        default_factory=dict,
+        description="Monthly additional investments: {'Jan': 50.0, ...}"
     )
 
     # Target yields for new investments
@@ -241,7 +249,18 @@ class SubPortfolioProfile(BaseModel):
 
     @property
     def total_planned_investment(self) -> float:
+        """Total reinvestment of maturing funds."""
         return sum(self.investment_plan.values())
+
+    @property
+    def total_additional_investment(self) -> float:
+        """Total additional new investment."""
+        return sum(self.additional_investment.values())
+
+    @property
+    def total_deployment(self) -> float:
+        """Total deployment = reinvestment + additional."""
+        return self.total_planned_investment + self.total_additional_investment
 
     @property
     def maturity_pct_of_aum(self) -> float:
@@ -251,6 +270,19 @@ class SubPortfolioProfile(BaseModel):
 # Default sub-portfolio data based on 2026_Subportfolio_Profile.md
 MONTHS_2026 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# Chinese month names mapping
+MONTHS_CN = {
+    "Jan": "1月", "Feb": "2月", "Mar": "3月", "Apr": "4月",
+    "May": "5月", "Jun": "6月", "Jul": "7月", "Aug": "8月",
+    "Sep": "9月", "Oct": "10月", "Nov": "11月", "Dec": "12月",
+}
+
+# Unit conversion: 1 亿元 = 100 MM USD (assuming ~7.25 USDCNY)
+# For display purposes, we use USD MM as base and convert
+USD_TO_CNY = 7.25  # Exchange rate assumption
+MM_TO_YI = 100.0   # 1亿 = 100 MM
+
 
 DEFAULT_SUBPORTFOLIOS: dict[str, SubPortfolioProfile] = {
     "USD_SSA": SubPortfolioProfile(
@@ -271,7 +303,8 @@ DEFAULT_SUBPORTFOLIOS: dict[str, SubPortfolioProfile] = {
             "May": 0.0488, "Jun": 0.0162, "Jul": None, "Aug": 0.0405,
             "Sep": 0.0452, "Oct": None, "Nov": None, "Dec": None,
         },
-        investment_plan={m: 0.0 for m in MONTHS_2026},  # To be filled by user/optimizer
+        investment_plan={m: 0.0 for m in MONTHS_2026},
+        additional_investment={m: 0.0 for m in MONTHS_2026},
         investment_target_yields={m: None for m in MONTHS_2026},
     ),
     "AUD_Rates": SubPortfolioProfile(
@@ -292,7 +325,8 @@ DEFAULT_SUBPORTFOLIOS: dict[str, SubPortfolioProfile] = {
             "May": 0.0404, "Jun": None, "Jul": None, "Aug": None,
             "Sep": None, "Oct": None, "Nov": None, "Dec": None,
         },
-        investment_plan={m: 0.0 for m in MONTHS_2026},  # To be filled by user/optimizer
+        investment_plan={m: 0.0 for m in MONTHS_2026},
+        additional_investment={m: 0.0 for m in MONTHS_2026},
         investment_target_yields={m: None for m in MONTHS_2026},
     ),
 }

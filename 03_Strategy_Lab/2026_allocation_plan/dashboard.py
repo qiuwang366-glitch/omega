@@ -38,6 +38,9 @@ from config import (
     SubPortfolioProfile,
     DEFAULT_SUBPORTFOLIOS,
     MONTHS_2026,
+    MONTHS_CN,
+    USD_TO_CNY,
+    MM_TO_YI,
 )
 from data_provider import MarketDataFactory, SyntheticMarketData
 from allocation_engine import (
@@ -317,52 +320,80 @@ def create_fx_sensitivity_heatmap(
     return fig
 
 
+def mm_to_yi(value_mm: float) -> float:
+    """Convert USD MM to 亿元 (assuming USD/CNY rate)."""
+    return value_mm * USD_TO_CNY / MM_TO_YI
+
+
+def yi_to_mm(value_yi: float) -> float:
+    """Convert 亿元 to USD MM."""
+    return value_yi * MM_TO_YI / USD_TO_CNY
+
+
 def create_maturity_investment_chart(
     profiles: dict[str, SubPortfolioProfile],
 ) -> go.Figure:
-    """Create combined maturity and investment plan bar chart."""
+    """Create combined maturity, reinvestment, and additional investment bar chart."""
     fig = make_subplots(
         rows=2, cols=1,
-        subplot_titles=["USD SSA", "AUD Rates"],
+        subplot_titles=["USD SSA 美元超主权债", "AUD Rates 澳元利率债"],
         vertical_spacing=0.15,
         shared_xaxes=True,
     )
 
     colors = {
         "maturity": "#E74C3C",      # Red for maturities (outflow)
-        "investment": "#27AE60",    # Green for investments (inflow)
+        "reinvest": "#27AE60",      # Green for reinvestments
+        "additional": "#3498DB",    # Blue for additional investments
     }
 
-    for idx, (key, profile) in enumerate(profiles.items(), start=1):
-        # Maturity bars (negative to show outflow)
-        maturities = [profile.maturity_schedule.get(m, 0.0) for m in MONTHS_2026]
-        investments = [profile.investment_plan.get(m, 0.0) for m in MONTHS_2026]
+    month_labels = [MONTHS_CN[m] for m in MONTHS_2026]
 
-        # Maturity (shown as negative)
+    for idx, (key, profile) in enumerate(profiles.items(), start=1):
+        # Convert to 亿元
+        maturities_yi = [mm_to_yi(profile.maturity_schedule.get(m, 0.0)) for m in MONTHS_2026]
+        reinvest_yi = [mm_to_yi(profile.investment_plan.get(m, 0.0)) for m in MONTHS_2026]
+        additional_yi = [mm_to_yi(profile.additional_investment.get(m, 0.0)) for m in MONTHS_2026]
+
+        # Maturity (shown as negative - outflow)
         fig.add_trace(
             go.Bar(
-                name=f"{profile.name} Maturity",
-                x=MONTHS_2026,
-                y=[-m for m in maturities],
+                name="到期量",
+                x=month_labels,
+                y=[-m for m in maturities_yi],
                 marker_color=colors["maturity"],
-                hovertemplate="Month: %{x}<br>Maturing: $%{customdata:.1f}MM<extra></extra>",
-                customdata=maturities,
+                hovertemplate="%{x}<br>到期: %{customdata:.2f}亿元<extra></extra>",
+                customdata=maturities_yi,
                 showlegend=(idx == 1),
                 legendgroup="maturity",
             ),
             row=idx, col=1,
         )
 
-        # Investment (shown as positive)
+        # Reinvestment (到期再投)
         fig.add_trace(
             go.Bar(
-                name=f"{profile.name} Investment",
-                x=MONTHS_2026,
-                y=investments,
-                marker_color=colors["investment"],
-                hovertemplate="Month: %{x}<br>Investing: $%{y:.1f}MM<extra></extra>",
+                name="到期再投",
+                x=month_labels,
+                y=reinvest_yi,
+                marker_color=colors["reinvest"],
+                hovertemplate="%{x}<br>到期再投: %{y:.2f}亿元<extra></extra>",
                 showlegend=(idx == 1),
-                legendgroup="investment",
+                legendgroup="reinvest",
+            ),
+            row=idx, col=1,
+        )
+
+        # Additional investment (追加投资)
+        fig.add_trace(
+            go.Bar(
+                name="追加投资",
+                x=month_labels,
+                y=additional_yi,
+                marker_color=colors["additional"],
+                hovertemplate="%{x}<br>追加投资: %{y:.2f}亿元<extra></extra>",
+                showlegend=(idx == 1),
+                legendgroup="additional",
             ),
             row=idx, col=1,
         )
@@ -371,9 +402,9 @@ def create_maturity_investment_chart(
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=idx, col=1)
 
     fig.update_layout(
-        title=dict(text="2026 Maturity Wall & Investment Plan", font=dict(size=18)),
-        barmode="overlay",
-        height=500,
+        title=dict(text="2026年到期墙与投资计划", font=dict(size=18)),
+        barmode="relative",
+        height=550,
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -383,9 +414,9 @@ def create_maturity_investment_chart(
         ),
     )
 
-    fig.update_yaxes(title_text="Amount (USD MM)", row=1, col=1)
-    fig.update_yaxes(title_text="Amount (USD MM)", row=2, col=1)
-    fig.update_xaxes(title_text="Month", row=2, col=1)
+    fig.update_yaxes(title_text="金额 (亿元)", row=1, col=1)
+    fig.update_yaxes(title_text="金额 (亿元)", row=2, col=1)
+    fig.update_xaxes(title_text="月份", row=2, col=1)
 
     return fig
 
@@ -394,39 +425,43 @@ def create_cashflow_waterfall(
     profile: SubPortfolioProfile,
 ) -> go.Figure:
     """Create waterfall chart showing cumulative cash position."""
-    maturities = [profile.maturity_schedule.get(m, 0.0) for m in MONTHS_2026]
-    investments = [profile.investment_plan.get(m, 0.0) for m in MONTHS_2026]
+    month_labels = [MONTHS_CN[m] for m in MONTHS_2026]
 
-    # Net cashflow = maturities - investments (positive = cash in hand)
-    net_flows = [m - i for m, i in zip(maturities, investments)]
+    # Convert to 亿元
+    maturities_yi = [mm_to_yi(profile.maturity_schedule.get(m, 0.0)) for m in MONTHS_2026]
+    reinvest_yi = [mm_to_yi(profile.investment_plan.get(m, 0.0)) for m in MONTHS_2026]
+    additional_yi = [mm_to_yi(profile.additional_investment.get(m, 0.0)) for m in MONTHS_2026]
+
+    # Net cashflow = maturities - reinvest - additional (positive = cash in hand)
+    net_flows = [m - r - a for m, r, a in zip(maturities_yi, reinvest_yi, additional_yi)]
     cumulative = np.cumsum(net_flows)
 
     fig = go.Figure()
 
     # Net flow bars
     fig.add_trace(go.Bar(
-        name="Net Cashflow",
-        x=MONTHS_2026,
+        name="净现金流",
+        x=month_labels,
         y=net_flows,
         marker_color=["#27AE60" if x >= 0 else "#E74C3C" for x in net_flows],
-        hovertemplate="Month: %{x}<br>Net Flow: $%{y:.1f}MM<extra></extra>",
+        hovertemplate="%{x}<br>净现金流: %{y:.2f}亿元<extra></extra>",
     ))
 
     # Cumulative line
     fig.add_trace(go.Scatter(
-        name="Cumulative",
-        x=MONTHS_2026,
+        name="累计",
+        x=month_labels,
         y=cumulative,
         mode="lines+markers",
-        line=dict(color="#3498DB", width=3),
+        line=dict(color="#9B59B6", width=3),
         marker=dict(size=8),
-        hovertemplate="Month: %{x}<br>Cumulative: $%{y:.1f}MM<extra></extra>",
+        hovertemplate="%{x}<br>累计: %{y:.2f}亿元<extra></extra>",
     ))
 
     fig.update_layout(
-        title=f"{profile.name}: Net Cashflow & Cumulative Position",
-        xaxis=dict(title="Month"),
-        yaxis=dict(title="Amount (USD MM)"),
+        title=f"{profile.name}: 净现金流与累计头寸",
+        xaxis=dict(title="月份"),
+        yaxis=dict(title="金额 (亿元)"),
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
     )
@@ -437,23 +472,68 @@ def create_cashflow_waterfall(
 def create_subportfolio_summary_table(
     profiles: dict[str, SubPortfolioProfile],
 ) -> pd.DataFrame:
-    """Create summary table for sub-portfolios."""
+    """Create summary table for sub-portfolios in Chinese with 亿元 units."""
     records = []
     for key, p in profiles.items():
-        total_mat = p.total_maturing_2026
-        total_inv = p.total_planned_investment
+        total_mat_yi = mm_to_yi(p.total_maturing_2026)
+        total_reinv_yi = mm_to_yi(p.total_planned_investment)
+        total_add_yi = mm_to_yi(p.total_additional_investment)
+        total_deploy_yi = total_reinv_yi + total_add_yi
+        aum_yi = mm_to_yi(p.aum_usd_mm)
+        carry_yi = mm_to_yi(p.annual_carry_usd_mm)
+
         records.append({
-            "Portfolio": p.name,
-            "Currency": p.currency.value,
-            "AUM ($MM)": f"{p.aum_usd_mm:,.0f}",
-            "Positions": p.n_positions,
-            "Yield (%)": f"{p.wtd_avg_yield * 100:.2f}",
-            "Duration": f"{p.wtd_avg_duration:.2f}",
-            "Carry ($MM)": f"{p.annual_carry_usd_mm:,.1f}",
-            "2026 Maturing ($MM)": f"{total_mat:,.1f}",
-            "Maturity (% AUM)": f"{p.maturity_pct_of_aum * 100:.1f}%",
-            "Planned Investment ($MM)": f"{total_inv:,.1f}",
-            "Net Gap ($MM)": f"{total_mat - total_inv:,.1f}",
+            "组合": p.name,
+            "币种": p.currency.value,
+            "规模(亿元)": f"{aum_yi:.1f}",
+            "持仓数": p.n_positions,
+            "收益率(%)": f"{p.wtd_avg_yield * 100:.2f}",
+            "久期": f"{p.wtd_avg_duration:.2f}",
+            "年化利息(亿元)": f"{carry_yi:.2f}",
+            "2026到期(亿元)": f"{total_mat_yi:.2f}",
+            "到期占比": f"{p.maturity_pct_of_aum * 100:.1f}%",
+            "到期再投(亿元)": f"{total_reinv_yi:.2f}",
+            "追加投资(亿元)": f"{total_add_yi:.2f}",
+            "总投放(亿元)": f"{total_deploy_yi:.2f}",
+            "缺口(亿元)": f"{total_mat_yi - total_deploy_yi:.2f}",
+        })
+    return pd.DataFrame(records)
+
+
+def create_yield_impact_analysis(
+    profiles: dict[str, SubPortfolioProfile],
+    current_yield_estimate: float = 0.045,
+) -> pd.DataFrame:
+    """Create yield pickup analysis for new investments."""
+    records = []
+    for key, p in profiles.items():
+        # Calculate weighted average exit yield for maturities
+        total_mat = p.total_maturing_2026
+        if total_mat > 0:
+            weighted_exit_yield = sum(
+                p.maturity_schedule.get(m, 0.0) * (p.maturity_exit_yields.get(m) or 0.0)
+                for m in MONTHS_2026
+                if p.maturity_exit_yields.get(m) is not None
+            )
+            maturing_with_yield = sum(
+                p.maturity_schedule.get(m, 0.0)
+                for m in MONTHS_2026
+                if p.maturity_exit_yields.get(m) is not None
+            )
+            avg_exit_yield = weighted_exit_yield / maturing_with_yield if maturing_with_yield > 0 else 0.0
+        else:
+            avg_exit_yield = 0.0
+
+        yield_pickup = current_yield_estimate - avg_exit_yield
+
+        records.append({
+            "组合": p.name,
+            "当前组合收益率(%)": f"{p.wtd_avg_yield * 100:.2f}",
+            "到期平均收益率(%)": f"{avg_exit_yield * 100:.2f}",
+            "新投预估收益率(%)": f"{current_yield_estimate * 100:.2f}",
+            "收益率提升(bp)": f"{yield_pickup * 10000:.0f}",
+            "到期量(亿元)": f"{mm_to_yi(total_mat):.2f}",
+            "预估NII提升(万元)": f"{mm_to_yi(total_mat) * yield_pickup * 10000:.0f}",
         })
     return pd.DataFrame(records)
 
@@ -697,73 +777,127 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
     # === Tab 2: 2026 Allocation Plan ===
     with tab2:
-        st.header("2026 Sub-Portfolio Allocation Plan")
+        st.header("2026年子组合配置计划")
 
         st.markdown("""
-        > **Reinvestment Risk**: Track maturity wall and plan new deployments.
-        > Edit the investment plan below to model different deployment strategies.
+        > **再投资风险管理**: 跟踪到期墙，规划到期再投与追加投资节奏。
+        > 下方可编辑每月的投资计划，单位为**亿元**（按1美元=7.25人民币换算）。
         """)
 
         # Get current plans from session state
         profiles = st.session_state.subportfolio_plans
 
         # Summary table
-        st.subheader("Sub-Portfolio Summary")
+        st.subheader("组合概览")
         summary_df = create_subportfolio_summary_table(profiles)
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
         # Main visualization
-        st.subheader("Maturity Wall & Investment Plan")
+        st.subheader("到期墙与投资计划")
         fig_maturity = create_maturity_investment_chart(profiles)
         st.plotly_chart(fig_maturity, use_container_width=True)
 
+        # Yield impact analysis
+        st.subheader("收益率影响分析")
+        col_y1, col_y2 = st.columns([1, 3])
+        with col_y1:
+            new_yield_estimate = st.slider(
+                "新投预估收益率 (%)",
+                min_value=3.0,
+                max_value=6.0,
+                value=4.5,
+                step=0.1,
+                key="new_yield_slider",
+            ) / 100
+        with col_y2:
+            yield_df = create_yield_impact_analysis(profiles, new_yield_estimate)
+            st.dataframe(yield_df, use_container_width=True, hide_index=True)
+
         # Editable investment plan
-        st.subheader("Edit Investment Plan")
+        st.markdown("---")
+        st.subheader("编辑投资计划")
 
         for key, profile in profiles.items():
+            aum_yi = mm_to_yi(profile.aum_usd_mm)
+            mat_yi = mm_to_yi(profile.total_maturing_2026)
+
             with st.expander(f"📌 {profile.name} ({profile.currency.value})", expanded=True):
                 st.markdown(f"""
-                **Current Position**: ${profile.aum_usd_mm:,.0f}MM AUM |
-                **2026 Maturities**: ${profile.total_maturing_2026:,.1f}MM ({profile.maturity_pct_of_aum*100:.1f}% of AUM)
+                **当前规模**: {aum_yi:.1f}亿元 |
+                **2026到期**: {mat_yi:.2f}亿元 ({profile.maturity_pct_of_aum*100:.1f}%)
                 """)
 
-                # Investment input grid
-                cols = st.columns(6)
-                updated_plan = profile.investment_plan.copy()
+                # Two sections: 到期再投 and 追加投资
+                tab_reinv, tab_add = st.tabs(["📥 到期再投", "📈 追加投资"])
 
-                for i, month in enumerate(MONTHS_2026):
-                    col_idx = i % 6
-                    maturity_amt = profile.maturity_schedule.get(month, 0.0)
-                    current_inv = profile.investment_plan.get(month, 0.0)
+                with tab_reinv:
+                    st.caption("到期再投：将到期资金重新投入市场")
+                    cols = st.columns(6)
+                    updated_reinv = profile.investment_plan.copy()
 
-                    with cols[col_idx]:
-                        # Show maturity amount as reference
-                        if maturity_amt > 0:
-                            st.caption(f"{month}: Mat ${maturity_amt:.0f}MM")
-                        else:
-                            st.caption(f"{month}")
+                    for i, month in enumerate(MONTHS_2026):
+                        col_idx = i % 6
+                        maturity_amt_yi = mm_to_yi(profile.maturity_schedule.get(month, 0.0))
+                        current_reinv_yi = mm_to_yi(profile.investment_plan.get(month, 0.0))
 
-                        new_val = st.number_input(
-                            f"Invest ({month})",
-                            min_value=0.0,
-                            max_value=1000.0,
-                            value=float(current_inv),
-                            step=10.0,
-                            key=f"inv_{key}_{month}",
-                            label_visibility="collapsed",
-                        )
-                        updated_plan[month] = new_val
+                        with cols[col_idx]:
+                            if maturity_amt_yi > 0:
+                                st.caption(f"{MONTHS_CN[month]}: 到期{maturity_amt_yi:.2f}亿")
+                            else:
+                                st.caption(f"{MONTHS_CN[month]}")
 
-                    # Reset to next row after 6 months
-                    if col_idx == 5 and i < 11:
-                        cols = st.columns(6)
+                            new_val_yi = st.number_input(
+                                f"再投({month})",
+                                min_value=0.0,
+                                max_value=50.0,
+                                value=float(current_reinv_yi),
+                                step=0.5,
+                                key=f"reinv_{key}_{month}",
+                                label_visibility="collapsed",
+                                format="%.2f",
+                            )
+                            updated_reinv[month] = yi_to_mm(new_val_yi)
+
+                        if col_idx == 5 and i < 11:
+                            cols = st.columns(6)
+
+                    profile.investment_plan = updated_reinv
+
+                with tab_add:
+                    st.caption("追加投资：新增资金配置（非到期再投）")
+                    cols = st.columns(6)
+                    updated_add = profile.additional_investment.copy()
+
+                    for i, month in enumerate(MONTHS_2026):
+                        col_idx = i % 6
+                        current_add_yi = mm_to_yi(profile.additional_investment.get(month, 0.0))
+
+                        with cols[col_idx]:
+                            st.caption(f"{MONTHS_CN[month]}")
+
+                            new_val_yi = st.number_input(
+                                f"追加({month})",
+                                min_value=0.0,
+                                max_value=50.0,
+                                value=float(current_add_yi),
+                                step=0.5,
+                                key=f"add_{key}_{month}",
+                                label_visibility="collapsed",
+                                format="%.2f",
+                            )
+                            updated_add[month] = yi_to_mm(new_val_yi)
+
+                        if col_idx == 5 and i < 11:
+                            cols = st.columns(6)
+
+                    profile.additional_investment = updated_add
 
                 # Update session state
-                profile.investment_plan = updated_plan
                 st.session_state.subportfolio_plans[key] = profile
 
         # Cashflow analysis
-        st.subheader("Net Cashflow Analysis")
+        st.markdown("---")
+        st.subheader("净现金流分析")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -780,19 +914,19 @@ def render_main_content(settings: dict[str, Any]) -> None:
 
         # Quick allocation buttons
         st.markdown("---")
-        st.subheader("Quick Allocation Strategies")
+        st.subheader("快捷配置策略")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            if st.button("🔄 Match Maturities", help="Set investment = maturity each month"):
+            if st.button("🔄 匹配到期", help="每月到期再投 = 到期量"):
                 for key, profile in profiles.items():
                     profile.investment_plan = profile.maturity_schedule.copy()
                     st.session_state.subportfolio_plans[key] = profile
                 st.rerun()
 
         with col2:
-            if st.button("⚡ Front-Load Q1", help="Deploy all in Jan-Mar"):
+            if st.button("⚡ 前置Q1", help="40% 1月 / 35% 2月 / 25% 3月"):
                 for key, profile in profiles.items():
                     total = profile.total_maturing_2026
                     profile.investment_plan = {m: 0.0 for m in MONTHS_2026}
@@ -803,12 +937,40 @@ def render_main_content(settings: dict[str, Any]) -> None:
                 st.rerun()
 
         with col3:
-            if st.button("📅 Even Monthly", help="Spread evenly across 12 months"):
+            if st.button("📅 均匀分布", help="平均分配到12个月"):
                 for key, profile in profiles.items():
                     monthly = profile.total_maturing_2026 / 12
                     profile.investment_plan = {m: monthly for m in MONTHS_2026}
                     st.session_state.subportfolio_plans[key] = profile
                 st.rerun()
+
+        with col4:
+            if st.button("🗑️ 清空计划", help="清空所有投资计划"):
+                for key, profile in profiles.items():
+                    profile.investment_plan = {m: 0.0 for m in MONTHS_2026}
+                    profile.additional_investment = {m: 0.0 for m in MONTHS_2026}
+                    st.session_state.subportfolio_plans[key] = profile
+                st.rerun()
+
+        # Summary metrics
+        st.markdown("---")
+        st.subheader("投资计划汇总")
+
+        total_mat_yi = sum(mm_to_yi(p.total_maturing_2026) for p in profiles.values())
+        total_reinv_yi = sum(mm_to_yi(p.total_planned_investment) for p in profiles.values())
+        total_add_yi = sum(mm_to_yi(p.total_additional_investment) for p in profiles.values())
+        total_deploy_yi = total_reinv_yi + total_add_yi
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("2026总到期", f"{total_mat_yi:.2f}亿元")
+        with m2:
+            st.metric("到期再投", f"{total_reinv_yi:.2f}亿元")
+        with m3:
+            st.metric("追加投资", f"{total_add_yi:.2f}亿元", delta=f"+{total_add_yi:.2f}" if total_add_yi > 0 else None)
+        with m4:
+            gap = total_mat_yi - total_deploy_yi
+            st.metric("资金缺口", f"{gap:.2f}亿元", delta=f"{-gap:.2f}" if gap != 0 else "0", delta_color="inverse")
 
     # === Tab 3: Simulation ===
     with tab3:

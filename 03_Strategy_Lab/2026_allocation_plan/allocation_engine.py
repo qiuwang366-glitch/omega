@@ -7,17 +7,24 @@ Handles NII calculation, FTP arbitrage, and multi-currency P&L.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
+
+# Add current directory to path for Streamlit Cloud compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
-from .analytics import FTPCalculator, YieldSurface, FXAnalytics
-from .config import (
+from analytics import FTPCalculator, YieldSurface, FXAnalytics
+from config import (
     Currency,
     SimulationParams,
     FTPConfig,
@@ -25,7 +32,7 @@ from .config import (
     YieldCurveRegime,
     get_default_config,
 )
-from .data_provider import MarketDataProvider, MarketDataFactory
+from data_provider import MarketDataProvider, MarketDataFactory
 
 
 # Configure logging

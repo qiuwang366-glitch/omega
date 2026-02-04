@@ -3,3 +3,8 @@ polars
 xbbg
 office365-rest-python-client
 quantlib-python
+numpy
+pandas
+pydantic>=2.0
+plotly>=5.0
+scipy

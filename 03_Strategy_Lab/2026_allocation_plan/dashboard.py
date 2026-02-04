@@ -8,6 +8,14 @@ Run with: streamlit run dashboard.py
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path for Streamlit Cloud compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
+
 from datetime import date
 from typing import Any
 
@@ -18,9 +26,9 @@ from plotly.subplots import make_subplots
 
 import streamlit as st
 
-# Local imports
-from .analytics import NelsonSiegelSvensson, YieldSurface
-from .config import (
+# Local imports (use absolute imports for Streamlit compatibility)
+from analytics import NelsonSiegelSvensson, YieldSurface
+from config import (
     Currency,
     SimulationParams,
     YieldCurveRegime,
@@ -28,8 +36,8 @@ from .config import (
     DEFAULT_NSS_PARAMS,
     get_default_config,
 )
-from .data_provider import MarketDataFactory, SyntheticMarketData
-from .allocation_engine import (
+from data_provider import MarketDataFactory, SyntheticMarketData
+from allocation_engine import (
     PortfolioSimulator,
     AllocationStrategy,
     SimulationResult,

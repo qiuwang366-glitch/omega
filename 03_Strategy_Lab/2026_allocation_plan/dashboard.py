@@ -481,7 +481,7 @@ def render_main_content(settings: dict[str, Any]) -> None:
                 # Full forward rate matrix
                 st.subheader("Forward Rate Matrix (%)")
                 st.dataframe(
-                    real_surface.to_dataframe().style.format("{:.2f}").background_gradient(cmap="YlOrRd"),
+                    real_surface.to_dataframe(),
                     use_container_width=True,
                 )
 

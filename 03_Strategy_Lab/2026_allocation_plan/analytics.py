@@ -6,14 +6,21 @@ All operations are vectorized for performance on large grids.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
+
+# Add current directory to path for Streamlit Cloud compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
 
 import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from .config import NSSParams, Currency
+    from config import NSSParams, Currency
 
 
 # Type aliases for clarity

@@ -31,7 +31,15 @@ Run Dashboard:
     cd 03_Strategy_Lab/2026_allocation_plan
     streamlit run dashboard.py
 """
-from .config import (
+import sys
+from pathlib import Path
+
+# Add current directory to path for Streamlit Cloud compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
+
+from config import (
     Currency,
     YieldCurveRegime,
     NSSParams,
@@ -46,7 +54,7 @@ from .config import (
     get_default_config,
 )
 
-from .analytics import (
+from analytics import (
     NelsonSiegelSvensson,
     YieldSurface,
     YieldSurfaceGrid,
@@ -56,7 +64,7 @@ from .analytics import (
     compute_carry_rolldown,
 )
 
-from .data_provider import (
+from data_provider import (
     MarketDataProvider,
     CSVMarketData,
     SyntheticMarketData,
@@ -66,7 +74,7 @@ from .data_provider import (
     FXRateData,
 )
 
-from .allocation_engine import (
+from allocation_engine import (
     AllocationStrategy,
     PortfolioSimulator,
     SimulationResult,

@@ -7,18 +7,24 @@ Supports seamless swapping between CSV data and synthetic generators.
 from __future__ import annotations
 
 import logging
+import sys
 from abc import ABC, abstractmethod
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+
+# Add current directory to path for Streamlit Cloud compatibility
+_this_dir = Path(__file__).parent
+if str(_this_dir) not in sys.path:
+    sys.path.insert(0, str(_this_dir))
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
-from .analytics import NelsonSiegelSvensson, YieldSurface
-from .config import (
+from analytics import NelsonSiegelSvensson, YieldSurface
+from config import (
     Currency,
     NSSParams,
     SimulationParams,
@@ -710,7 +716,7 @@ class HybridMarketData(MarketDataProvider):
 # 6. Module Test
 # ============================================================================
 if __name__ == "__main__":
-    from .config import get_default_config
+    from config import get_default_config
 
     print("=== Data Provider Module Test ===\n")
 

@@ -44,10 +44,34 @@ st.set_page_config(
 
 
 class Sector(str, Enum):
+    # China Onshore/Offshore
     LGFV = "LGFV"
     SOE = "SOE"
     FINANCIAL = "FINANCIAL"
     CORP = "CORP"
+    SOVEREIGN = "SOVEREIGN"
+    # International
+    DM_SOVEREIGN = "DM_SOVEREIGN"
+    EM_SOVEREIGN = "EM_SOVEREIGN"
+    SUPRA = "SUPRA"
+    US_CORP = "US_CORP"
+    EU_CORP = "EU_CORP"
+    G_SIB = "G-SIB"
+    EM_FIN = "EM_FIN"
+    HY = "HY"
+
+
+class Region(str, Enum):
+    CHINA_ONSHORE = "CHINA_ONSHORE"
+    CHINA_OFFSHORE = "CHINA_OFFSHORE"
+    US = "US"
+    EU = "EU"
+    UK = "UK"
+    JAPAN = "JAPAN"
+    LATAM = "LATAM"
+    CEEMEA = "CEEMEA"
+    ASIA_EX_CHINA = "ASIA_EX_CHINA"
+    SUPRANATIONAL = "SUPRANATIONAL"
 
 
 class CreditRating(str, Enum):
@@ -171,12 +195,40 @@ class ColorScheme:
     def get_sector_color(cls, sector: str) -> str:
         scheme = cls()
         mapping = {
+            # China
             "LGFV": scheme.accent_blue,
             "SOE": scheme.accent_purple,
             "FINANCIAL": scheme.accent_green,
             "CORP": scheme.accent_yellow,
+            "SOVEREIGN": "#238636",
+            # International
+            "DM_SOVEREIGN": "#238636",
+            "EM_SOVEREIGN": "#7ee787",
+            "SUPRA": "#a371f7",
+            "US_CORP": "#db6d28",
+            "EU_CORP": "#d29922",
+            "G-SIB": "#58a6ff",
+            "EM_FIN": "#3fb950",
+            "HY": "#f85149",
         }
         return mapping.get(sector.upper(), scheme.text_secondary)
+
+    @classmethod
+    def get_region_color(cls, region: str) -> str:
+        scheme = cls()
+        mapping = {
+            "CHINA_ONSHORE": "#f85149",
+            "CHINA_OFFSHORE": "#db6d28",
+            "US": "#58a6ff",
+            "EU": "#a371f7",
+            "UK": "#3fb950",
+            "JAPAN": "#d29922",
+            "LATAM": "#7ee787",
+            "CEEMEA": "#f0883e",
+            "ASIA_EX_CHINA": "#8957e5",
+            "SUPRANATIONAL": "#238636",
+        }
+        return mapping.get(region.upper(), scheme.text_secondary)
 
 
 def get_premium_layout(title: str = "", height: int = 400) -> dict:
@@ -205,14 +257,28 @@ class Obligor(BaseModel):
     name_en: str | None = None
     sector: Sector
     sub_sector: str
+    region: Region = Region.CHINA_OFFSHORE
+    country: str | None = None
     province: str | None = None
     rating_internal: CreditRating
     rating_outlook: RatingOutlook = RatingOutlook.STABLE
+    # Fundamentals (for international issuers)
+    ticker: str | None = None
+    lei: str | None = None  # Legal Entity Identifier
+    parent_entity: str | None = None
 
     @computed_field
     @property
     def rating_score(self) -> int:
         return RATING_SCORE.get(self.rating_internal, 50)
+
+    @computed_field
+    @property
+    def display_name(self) -> str:
+        """Display name preferring English for international issuers"""
+        if self.region not in (Region.CHINA_ONSHORE, Region.CHINA_OFFSHORE) and self.name_en:
+            return self.name_en
+        return self.name_cn
 
 
 class BondPosition(BaseModel):
@@ -330,7 +396,7 @@ class NewsItem(BaseModel):
 
 def create_concentration_chart(exposures: list[CreditExposure], top_n: int = 15) -> go.Figure:
     sorted_exposures = sorted(exposures, key=lambda x: x.total_market_usd, reverse=True)[:top_n]
-    names = [e.obligor.name_cn for e in sorted_exposures]
+    names = [e.obligor.display_name for e in sorted_exposures]
     values = [e.total_market_usd / 1e6 for e in sorted_exposures]
     pcts = [e.pct_of_aum for e in sorted_exposures]
     sectors = [e.obligor.sector.value for e in sorted_exposures]
@@ -341,10 +407,97 @@ def create_concentration_chart(exposures: list[CreditExposure], top_n: int = 15)
         x=values, y=names, orientation="h", marker_color=colors,
         text=[f"${v:.0f}M ({p:.1%})" for v, p in zip(values, pcts)],
         textposition="outside",
-        hovertemplate="<b>%{y}</b><br>市值: $%{x:.0f}M<extra></extra>",
+        hovertemplate="<b>%{y}</b><br>MV: $%{x:.0f}M<extra></extra>",
     ))
-    fig.update_layout(**get_premium_layout("Top发行人持仓", height=max(400, top_n * 30)))
+    fig.update_layout(**get_premium_layout("Top Issuers by Market Value", height=max(400, top_n * 30)))
     fig.update_layout(showlegend=False)
+    fig.update_yaxes(autorange="reversed")
+    return fig
+
+
+def create_region_distribution_chart(exposures: list[CreditExposure]) -> go.Figure:
+    """Create region distribution pie chart"""
+    region_totals: dict[str, float] = {}
+    for exp in exposures:
+        region = exp.obligor.region.value
+        region_totals[region] = region_totals.get(region, 0) + exp.total_market_usd
+
+    labels = list(region_totals.keys())
+    values = [v / 1e6 for v in region_totals.values()]
+    colors = [ColorScheme.get_region_color(r) for r in labels]
+
+    # Create display labels
+    label_map = {
+        "CHINA_OFFSHORE": "China Offshore",
+        "CHINA_ONSHORE": "China Onshore",
+        "US": "United States",
+        "EU": "Europe",
+        "UK": "United Kingdom",
+        "JAPAN": "Japan",
+        "LATAM": "Latin America",
+        "CEEMEA": "CEEMEA",
+        "ASIA_EX_CHINA": "Asia ex-China",
+        "SUPRANATIONAL": "Supranational",
+    }
+    display_labels = [label_map.get(l, l) for l in labels]
+
+    fig = go.Figure(data=[go.Pie(
+        labels=display_labels, values=values, hole=0.5, marker_colors=colors,
+        textinfo="label+percent", textposition="outside",
+    )])
+    fig.update_layout(**get_premium_layout("Regional Distribution", height=400))
+    fig.update_layout(showlegend=False)
+    return fig
+
+
+def create_currency_breakdown_chart(exposures: list[CreditExposure]) -> go.Figure:
+    """Create currency breakdown chart"""
+    scheme = ColorScheme()
+    currency_totals: dict[str, float] = {}
+    for exp in exposures:
+        for bond in exp.bonds:
+            currency_totals[bond.currency] = currency_totals.get(bond.currency, 0) + bond.market_value_usd
+
+    labels = list(currency_totals.keys())
+    values = [v / 1e6 for v in currency_totals.values()]
+
+    ccy_colors = {
+        "USD": scheme.accent_blue,
+        "EUR": scheme.accent_purple,
+        "GBP": scheme.accent_green,
+        "JPY": scheme.accent_yellow,
+        "CNH": scheme.accent_orange,
+        "CNY": scheme.accent_red,
+    }
+    colors = [ccy_colors.get(l, scheme.text_secondary) for l in labels]
+
+    fig = go.Figure(data=[go.Bar(
+        x=labels, y=values, marker_color=colors,
+        text=[f"${v:.0f}M" for v in values], textposition="outside",
+    )])
+    fig.update_layout(**get_premium_layout("Currency Breakdown", height=350))
+    return fig
+
+
+def create_dv01_decomposition_chart(exposures: list[CreditExposure]) -> go.Figure:
+    """Create DV01 decomposition by sector"""
+    scheme = ColorScheme()
+    sector_dv01: dict[str, float] = {}
+    for exp in exposures:
+        sector = exp.obligor.sector.value
+        sector_dv01[sector] = sector_dv01.get(sector, 0) + exp.credit_dv01_usd
+
+    # Sort by DV01 descending
+    sorted_items = sorted(sector_dv01.items(), key=lambda x: x[1], reverse=True)
+    labels = [item[0] for item in sorted_items]
+    values = [item[1] / 1e6 for item in sorted_items]  # Convert to $M
+    colors = [ColorScheme.get_sector_color(l) for l in labels]
+
+    fig = go.Figure(data=[go.Bar(
+        x=values, y=labels, orientation="h", marker_color=colors,
+        text=[f"${v:.2f}M" for v in values], textposition="outside",
+    )])
+    fig.update_layout(**get_premium_layout("Credit DV01 by Sector ($M/bp)", height=400))
     fig.update_yaxes(autorange="reversed")
     return fig
 
@@ -448,72 +601,173 @@ def create_risk_heatmap(exposures: list[CreditExposure]) -> go.Figure:
 
 
 def generate_mock_data() -> tuple[dict[str, Obligor], list[CreditExposure], list[RiskAlert], list[NewsItem]]:
+    """Generate comprehensive mock data with international obligors"""
+
+    # China Offshore obligors (id, name_cn, name_en, sector, sub_sector, region, country, province, rating, outlook, ticker, nominal_range)
     obligor_templates = [
-        ("OBL001", "某省城投集团", Sector.LGFV, "省级城投", "云南", CreditRating.AA, RatingOutlook.STABLE),
-        ("OBL002", "某市城建投资", Sector.LGFV, "地级市城投", "重庆", CreditRating.AA_MINUS, RatingOutlook.NEGATIVE),
-        ("OBL003", "某央企集团", Sector.SOE, "央企", None, CreditRating.AAA, RatingOutlook.STABLE),
-        ("OBL004", "某股份制银行", Sector.FINANCIAL, "股份制银行", None, CreditRating.AA_PLUS, RatingOutlook.STABLE),
-        ("OBL005", "某地方国企", Sector.SOE, "地方国企", "四川", CreditRating.AA, RatingOutlook.WATCH_NEG),
-        ("OBL006", "某区县城投", Sector.LGFV, "区县城投", "贵州", CreditRating.AA_MINUS, RatingOutlook.NEGATIVE),
-        ("OBL007", "某科技企业", Sector.CORP, "科技", "北京", CreditRating.A, RatingOutlook.POSITIVE),
-        ("OBL008", "某城商行", Sector.FINANCIAL, "城商行", "江苏", CreditRating.AA, RatingOutlook.STABLE),
+        # China LGFV
+        ("CN001", "云南省城投集团", "Yunnan Provincial Investment", Sector.LGFV, "省级城投", Region.CHINA_OFFSHORE, "CN", "云南", CreditRating.AA, RatingOutlook.STABLE, None, (200, 500)),
+        ("CN002", "重庆市城建投资", "Chongqing Urban Construction", Sector.LGFV, "地级市城投", Region.CHINA_OFFSHORE, "CN", "重庆", CreditRating.AA_MINUS, RatingOutlook.NEGATIVE, None, (150, 350)),
+        ("CN003", "贵州省交通投资", "Guizhou Transportation", Sector.LGFV, "省级城投", Region.CHINA_OFFSHORE, "CN", "贵州", CreditRating.AA_MINUS, RatingOutlook.WATCH_NEG, None, (100, 250)),
+        ("CN004", "成都兴城投资", "Chengdu Xingcheng Investment", Sector.LGFV, "地级市城投", Region.CHINA_OFFSHORE, "CN", "四川", CreditRating.AA, RatingOutlook.STABLE, None, (180, 400)),
+
+        # China SOE
+        ("CN005", "中国石油化工集团", "Sinopec Group", Sector.SOE, "央企能源", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AAA, RatingOutlook.STABLE, "386 HK", (500, 1000)),
+        ("CN006", "中国国家电网", "State Grid Corporation", Sector.SOE, "央企公用事业", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AAA, RatingOutlook.STABLE, None, (400, 800)),
+        ("CN007", "中国铁路建设", "China Railway Construction", Sector.SOE, "央企基建", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AA_PLUS, RatingOutlook.STABLE, "1186 HK", (300, 600)),
+
+        # China Financial
+        ("CN008", "中国工商银行", "ICBC", Sector.FINANCIAL, "国有大行", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AAA, RatingOutlook.STABLE, "1398 HK", (600, 1200)),
+        ("CN009", "招商银行", "China Merchants Bank", Sector.FINANCIAL, "股份制银行", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AA_PLUS, RatingOutlook.STABLE, "3968 HK", (250, 500)),
+        ("CN010", "中国人寿保险", "China Life Insurance", Sector.FINANCIAL, "保险", Region.CHINA_OFFSHORE, "CN", None, CreditRating.AA_PLUS, RatingOutlook.STABLE, "2628 HK", (200, 450)),
+
+        # G-SIB Banks
+        ("US001", "高盛集团", "Goldman Sachs Group", Sector.G_SIB, "Investment Bank", Region.US, "US", "New York", CreditRating.A, RatingOutlook.STABLE, "GS", (300, 700)),
+        ("US002", "摩根大通", "JPMorgan Chase", Sector.G_SIB, "Universal Bank", Region.US, "US", "New York", CreditRating.AA_MINUS, RatingOutlook.STABLE, "JPM", (400, 900)),
+        ("US003", "美国银行", "Bank of America", Sector.G_SIB, "Universal Bank", Region.US, "US", "North Carolina", CreditRating.A_PLUS, RatingOutlook.STABLE, "BAC", (350, 750)),
+        ("UK001", "汇丰控股", "HSBC Holdings", Sector.G_SIB, "Universal Bank", Region.UK, "GB", "London", CreditRating.AA_MINUS, RatingOutlook.STABLE, "HSBA LN", (450, 850)),
+        ("EU001", "法国巴黎银行", "BNP Paribas", Sector.G_SIB, "Universal Bank", Region.EU, "FR", None, CreditRating.A_PLUS, RatingOutlook.STABLE, "BNP FP", (280, 550)),
+        ("EU002", "德意志银行", "Deutsche Bank", Sector.G_SIB, "Universal Bank", Region.EU, "DE", "Frankfurt", CreditRating.A_MINUS, RatingOutlook.NEGATIVE, "DBK GR", (200, 400)),
+        ("JP001", "三菱日联金融", "MUFG Bank", Sector.G_SIB, "Universal Bank", Region.JAPAN, "JP", "Tokyo", CreditRating.A, RatingOutlook.STABLE, "8306 JP", (350, 650)),
+
+        # US Corporates
+        ("US004", "苹果公司", "Apple Inc", Sector.US_CORP, "Technology", Region.US, "US", "California", CreditRating.AA_PLUS, RatingOutlook.STABLE, "AAPL", (500, 1000)),
+        ("US005", "微软公司", "Microsoft Corp", Sector.US_CORP, "Technology", Region.US, "US", "Washington", CreditRating.AAA, RatingOutlook.STABLE, "MSFT", (450, 900)),
+        ("US006", "埃克森美孚", "Exxon Mobil", Sector.US_CORP, "Energy", Region.US, "US", "Texas", CreditRating.AA, RatingOutlook.STABLE, "XOM", (300, 600)),
+        ("US007", "辉瑞制药", "Pfizer Inc", Sector.US_CORP, "Healthcare", Region.US, "US", "New York", CreditRating.A_PLUS, RatingOutlook.STABLE, "PFE", (200, 450)),
+
+        # EU Corporates
+        ("EU003", "壳牌公司", "Shell plc", Sector.EU_CORP, "Energy", Region.UK, "GB", "London", CreditRating.AA_MINUS, RatingOutlook.STABLE, "SHEL LN", (350, 700)),
+        ("EU004", "西门子集团", "Siemens AG", Sector.EU_CORP, "Industrial", Region.EU, "DE", "Munich", CreditRating.A_PLUS, RatingOutlook.STABLE, "SIE GR", (200, 450)),
+        ("EU005", "雀巢公司", "Nestle SA", Sector.EU_CORP, "Consumer", Region.EU, "CH", "Vevey", CreditRating.AA, RatingOutlook.STABLE, "NESN SW", (250, 500)),
+
+        # EM Sovereign & Quasi-Sovereign
+        ("BR001", "巴西国家石油", "Petrobras", Sector.EM_SOVEREIGN, "Quasi-Sovereign Oil", Region.LATAM, "BR", "Rio de Janeiro", CreditRating.BBB_MINUS, RatingOutlook.STABLE, "PBR", (200, 450)),
+        ("MX001", "墨西哥国家石油", "Pemex", Sector.EM_SOVEREIGN, "Quasi-Sovereign Oil", Region.LATAM, "MX", "Mexico City", CreditRating.BB, RatingOutlook.NEGATIVE, "PEMEX", (150, 350)),
+        ("ID001", "印尼国家电力", "PLN Indonesia", Sector.EM_SOVEREIGN, "Quasi-Sovereign Utility", Region.ASIA_EX_CHINA, "ID", "Jakarta", CreditRating.BBB, RatingOutlook.STABLE, None, (100, 250)),
+
+        # Supranational
+        ("SUPRA01", "亚洲开发银行", "Asian Development Bank", Sector.SUPRA, "MDB", Region.SUPRANATIONAL, None, None, CreditRating.AAA, RatingOutlook.STABLE, None, (300, 600)),
+        ("SUPRA02", "亚投行", "AIIB", Sector.SUPRA, "MDB", Region.SUPRANATIONAL, None, None, CreditRating.AAA, RatingOutlook.STABLE, None, (200, 450)),
+
+        # High Yield
+        ("HY001", "某高收益地产", "Evergrande-like Property", Sector.HY, "Real Estate HY", Region.CHINA_OFFSHORE, "CN", "广东", CreditRating.B, RatingOutlook.NEGATIVE, None, (50, 150)),
     ]
 
+    total_aum = 50e9  # $50B AUM
     obligors = {}
     exposures = []
+    currencies = ["USD", "EUR", "GBP", "JPY", "CNH"]
 
-    for oid, name, sector, sub, province, rating, outlook in obligor_templates:
+    for template in obligor_templates:
+        oid, name_cn, name_en, sector, sub, region, country, province, rating, outlook, ticker, nominal_range = template
+
         obligor = Obligor(
-            obligor_id=oid, name_cn=name, sector=sector, sub_sector=sub,
-            province=province, rating_internal=rating, rating_outlook=outlook,
+            obligor_id=oid, name_cn=name_cn, name_en=name_en, sector=sector, sub_sector=sub,
+            region=region, country=country, province=province,
+            rating_internal=rating, rating_outlook=outlook, ticker=ticker,
         )
         obligors[oid] = obligor
 
+        # Generate bonds for each obligor
         bonds = []
-        for i in range(random.randint(2, 5)):
-            maturity_years = random.uniform(0.5, 8)
-            nominal = random.uniform(50, 300) * 1e6
-            bonds.append(BondPosition(
-                isin=f"{oid}-BOND-{i+1}", obligor_id=oid, bond_name=f"{name}债券{i+1}",
-                currency="USD", maturity_date=date.today() + timedelta(days=int(maturity_years * 365)),
-                coupon=random.uniform(3, 6), nominal=nominal, nominal_usd=nominal,
-                book_value_usd=nominal * random.uniform(0.95, 1.02),
-                market_value_usd=nominal * random.uniform(0.90, 1.05),
-                duration=maturity_years * 0.9, oas=random.uniform(80, 400),
-            ))
-        exposures.append(CreditExposure.from_positions(obligor, bonds, 50e9))
+        num_bonds = random.randint(2, 6)
+        for i in range(num_bonds):
+            maturity_years = random.uniform(0.5, 10)
+            nominal = random.uniform(*nominal_range) * 1e6
 
+            # Currency based on region
+            if region in (Region.CHINA_ONSHORE, Region.CHINA_OFFSHORE):
+                ccy = random.choice(["USD", "CNH"]) if region == Region.CHINA_OFFSHORE else "CNY"
+            elif region == Region.US:
+                ccy = "USD"
+            elif region in (Region.EU, Region.UK):
+                ccy = random.choice(["EUR", "GBP", "USD"])
+            elif region == Region.JAPAN:
+                ccy = random.choice(["JPY", "USD"])
+            else:
+                ccy = "USD"
+
+            # OAS varies by rating
+            base_oas = {
+                CreditRating.AAA: 20, CreditRating.AA_PLUS: 40, CreditRating.AA: 60,
+                CreditRating.AA_MINUS: 85, CreditRating.A_PLUS: 100, CreditRating.A: 120,
+                CreditRating.A_MINUS: 150, CreditRating.BBB_PLUS: 180, CreditRating.BBB: 220,
+                CreditRating.BBB_MINUS: 280, CreditRating.BB: 400, CreditRating.B: 600,
+            }.get(rating, 150)
+            oas = base_oas * random.uniform(0.8, 1.3)
+
+            bonds.append(BondPosition(
+                isin=f"{oid}-{ccy}-{i+1}", obligor_id=oid,
+                bond_name=f"{name_en or name_cn} {maturity_years:.1f}Y {ccy}",
+                currency=ccy, maturity_date=date.today() + timedelta(days=int(maturity_years * 365)),
+                coupon=random.uniform(2, 8), nominal=nominal, nominal_usd=nominal,
+                book_value_usd=nominal * random.uniform(0.95, 1.02),
+                market_value_usd=nominal * random.uniform(0.88, 1.05),
+                duration=maturity_years * random.uniform(0.85, 0.95), oas=oas,
+            ))
+        exposures.append(CreditExposure.from_positions(obligor, bonds, total_aum))
+
+    # Generate alerts with international context
     alerts = [
         RiskAlert(alert_id="ALT001", severity=Severity.CRITICAL, category=AlertCategory.RATING,
-                  obligor_id="OBL002", obligor_name="某市城建投资", signal_name="rating_change",
-                  message="评级下调至AA-，展望负面", metric_value=2.0, threshold=1.0, status=AlertStatus.PENDING),
+                  obligor_id="CN002", obligor_name="重庆市城建投资", signal_name="rating_change",
+                  message="Moody's downgrade to Ba1, outlook negative | 穆迪下调至Ba1，展望负面", metric_value=2.0, threshold=1.0, status=AlertStatus.PENDING),
         RiskAlert(alert_id="ALT002", severity=Severity.WARNING, category=AlertCategory.SPREAD,
-                  obligor_id="OBL006", obligor_name="某区县城投", signal_name="spread_percentile",
-                  message="OAS突破历史92%分位", metric_value=0.92, threshold=0.85, status=AlertStatus.INVESTIGATING),
-        RiskAlert(alert_id="ALT003", severity=Severity.WARNING, category=AlertCategory.NEWS,
-                  obligor_id="OBL005", obligor_name="某地方国企", signal_name="news_sentiment",
-                  message="近7天舆情负面 (sentiment: -0.45)", metric_value=-0.45, threshold=-0.30,
-                  status=AlertStatus.PENDING, ai_summary="近期有关于该企业现金流紧张的报道，建议关注其短期偿债能力。"),
-        RiskAlert(alert_id="ALT004", severity=Severity.CRITICAL, category=AlertCategory.CONCENTRATION,
-                  obligor_id="OBL001", obligor_name="某省城投集团", signal_name="concentration_single",
-                  message="单一发行人占比超过5%", metric_value=0.052, threshold=0.05, status=AlertStatus.PENDING),
+                  obligor_id="CN003", obligor_name="贵州省交通投资", signal_name="spread_percentile",
+                  message="OAS widened to 92nd percentile (historical) | OAS突破历史92%分位", metric_value=0.92, threshold=0.85, status=AlertStatus.INVESTIGATING),
+        RiskAlert(alert_id="ALT003", severity=Severity.CRITICAL, category=AlertCategory.RATING,
+                  obligor_id="EU002", obligor_name="Deutsche Bank", signal_name="rating_outlook",
+                  message="S&P revised outlook to Negative citing litigation risk | 标普下调展望至负面，关注诉讼风险", metric_value=1.0, threshold=0.0, status=AlertStatus.PENDING),
+        RiskAlert(alert_id="ALT004", severity=Severity.WARNING, category=AlertCategory.NEWS,
+                  obligor_id="MX001", obligor_name="Pemex", signal_name="news_sentiment",
+                  message="Negative news flow on production decline | 产量下滑负面新闻增加", metric_value=-0.55, threshold=-0.30,
+                  status=AlertStatus.PENDING, ai_summary="Production continues to decline YoY. Government support uncertain ahead of elections. Refinancing wall in 2025."),
+        RiskAlert(alert_id="ALT005", severity=Severity.WARNING, category=AlertCategory.CONCENTRATION,
+                  obligor_id="CN005", obligor_name="Sinopec Group", signal_name="concentration_single",
+                  message="Single issuer exceeds 4.5% limit | 单一发行人占比超4.5%", metric_value=0.048, threshold=0.045, status=AlertStatus.PENDING),
+        RiskAlert(alert_id="ALT006", severity=Severity.CRITICAL, category=AlertCategory.SPREAD,
+                  obligor_id="HY001", obligor_name="某高收益地产", signal_name="spread_zscore",
+                  message="OAS Z-score > 3.0, distressed levels | OAS Z-score超过3.0，进入困境区间", metric_value=3.2, threshold=3.0, status=AlertStatus.PENDING),
     ]
 
+    # Generate news with international coverage
     news_items = [
-        NewsItem(news_id="NEWS001", timestamp=datetime.now() - timedelta(hours=2), source="cls",
-                 title="某省财政厅发文支持城投平台债务重组",
-                 content="省财政厅发布指导意见，支持辖内城投平台通过债务重组、资产注入等方式化解债务风险...",
-                 obligor_ids=["OBL001"], summary="省级支持政策出台，利好区域城投",
-                 sentiment=Sentiment.POSITIVE, sentiment_score=0.6),
-        NewsItem(news_id="NEWS002", timestamp=datetime.now() - timedelta(hours=5), source="bloomberg",
-                 title="某市城建投资被曝现金流紧张",
-                 content="据知情人士透露，该公司近期应收账款回款困难，部分项目支出延迟...",
-                 obligor_ids=["OBL002"], summary="现金流压力显现，关注再融资能力",
+        NewsItem(news_id="NEWS001", timestamp=datetime.now() - timedelta(hours=1), source="Bloomberg",
+                 title="Fed Holds Rates Steady, Signals Cuts May Come Later This Year",
+                 content="The Federal Reserve held interest rates at 5.25%-5.50% but signaled potential cuts in H2...",
+                 obligor_ids=[], summary="Fed on hold but dovish tilt. IG credit should benefit from duration. Monitor HY refinancing.",
+                 sentiment=Sentiment.POSITIVE, sentiment_score=0.5),
+        NewsItem(news_id="NEWS002", timestamp=datetime.now() - timedelta(hours=3), source="Reuters",
+                 title="China's Ministry of Finance Announces LGFV Debt Resolution Framework",
+                 content="中国财政部发布城投债务化解框架，允许省级平台进行债务置换...",
+                 obligor_ids=["CN001", "CN002", "CN003", "CN004"], summary="Major policy support for LGFV sector. Provincial platforms benefit most. Watch implementation.",
+                 sentiment=Sentiment.POSITIVE, sentiment_score=0.7),
+        NewsItem(news_id="NEWS003", timestamp=datetime.now() - timedelta(hours=6), source="FT",
+                 title="Deutsche Bank Faces Fresh Concerns Over Commercial Real Estate Exposure",
+                 content="Deutsche Bank's US CRE portfolio under scrutiny as office vacancies rise...",
+                 obligor_ids=["EU002"], summary="CRE stress continues. Provisioning adequate but sentiment negative. Spreads may widen.",
+                 sentiment=Sentiment.NEGATIVE, sentiment_score=-0.6),
+        NewsItem(news_id="NEWS004", timestamp=datetime.now() - timedelta(hours=8), source="Bloomberg",
+                 title="Pemex Production Drops to Lowest Level Since 1979",
+                 content="Mexico's state oil company reported another decline in crude output...",
+                 obligor_ids=["MX001"], summary="Structural decline continues. Sovereign support implicit but fiscal constraints remain.",
                  sentiment=Sentiment.NEGATIVE, sentiment_score=-0.7),
-        NewsItem(news_id="NEWS003", timestamp=datetime.now() - timedelta(days=1), source="eastmoney",
-                 title="美联储议息会议在即，境外中资美元债或承压",
-                 content="分析师预计美联储将维持高利率，境外中资美元债收益率可能继续上行...",
-                 obligor_ids=[], summary="宏观利率风险提示", sentiment=Sentiment.NEUTRAL, sentiment_score=-0.1),
+        NewsItem(news_id="NEWS005", timestamp=datetime.now() - timedelta(hours=12), source="IFR",
+                 title="AIIB Prices $3bn Dual-Tranche Global Bond at Record Tight Spreads",
+                 content="Asian Infrastructure Investment Bank achieved its tightest spread ever on new issue...",
+                 obligor_ids=["SUPRA02"], summary="Strong demand for AAA supranational paper. Safe haven bid intact.",
+                 sentiment=Sentiment.POSITIVE, sentiment_score=0.6),
+        NewsItem(news_id="NEWS006", timestamp=datetime.now() - timedelta(days=1), source="Caixin",
+                 title="贵州省政府召开化债工作推进会",
+                 content="贵州省召开全省化债攻坚会议，要求各地市加快推进债务化解工作...",
+                 obligor_ids=["CN003"], summary="Provincial government prioritizing debt resolution. Near-term support positive, execution key.",
+                 sentiment=Sentiment.NEUTRAL, sentiment_score=0.2),
+        NewsItem(news_id="NEWS007", timestamp=datetime.now() - timedelta(days=1, hours=6), source="WSJ",
+                 title="JPMorgan Beats Estimates on Record Net Interest Income",
+                 content="JPMorgan Chase reported Q4 earnings that exceeded analyst expectations...",
+                 obligor_ids=["US002"], summary="Strong NII tailwind. Capital ratios robust. Credit quality stable.",
+                 sentiment=Sentiment.POSITIVE, sentiment_score=0.65),
     ]
 
     return obligors, exposures, alerts, news_items
@@ -603,44 +857,454 @@ def render_overview_page():
 
     total_market = sum(e.total_market_usd for e in exposures)
     total_obligors = len(exposures)
+    total_dv01 = sum(e.credit_dv01_usd for e in exposures)
     active_alerts = len([a for a in alerts if a.status == AlertStatus.PENDING])
     critical_alerts = len([a for a in alerts if a.severity == Severity.CRITICAL])
 
-    col1, col2, col3, col4 = st.columns(4)
+    # Top KPIs
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("总市值", f"${total_market/1e9:.2f}B")
+        st.metric("Total AUM", f"${total_market/1e9:.2f}B")
     with col2:
-        st.metric("发行人数", f"{total_obligors}")
+        st.metric("Issuers", f"{total_obligors}")
     with col3:
-        st.metric("活跃预警", f"{active_alerts}", delta=f"-{critical_alerts} 严重" if critical_alerts else None, delta_color="inverse")
-    with col4:
         avg_oas = sum(e.weighted_avg_oas * e.total_market_usd for e in exposures) / total_market if total_market > 0 else 0
-        st.metric("加权OAS", f"{avg_oas:.0f}bp")
+        st.metric("Wtd OAS", f"{avg_oas:.0f}bp")
+    with col4:
+        avg_dur = sum(e.weighted_avg_duration * e.total_market_usd for e in exposures) / total_market if total_market > 0 else 0
+        st.metric("Wtd Duration", f"{avg_dur:.2f}Y")
+    with col5:
+        st.metric("Active Alerts", f"{active_alerts}", delta=f"{critical_alerts} critical" if critical_alerts else None, delta_color="inverse")
 
     st.divider()
 
+    # Row 1: Concentration + Rating
     col1, col2 = st.columns([2, 1])
     with col1:
-        st.subheader("持仓集中度")
-        st.plotly_chart(create_concentration_chart(exposures, top_n=10), use_container_width=True)
+        st.subheader("Issuer Concentration")
+        st.plotly_chart(create_concentration_chart(exposures, top_n=12), use_container_width=True)
     with col2:
-        st.subheader("评级分布")
+        st.subheader("Rating Distribution")
         st.plotly_chart(create_rating_distribution_chart(exposures), use_container_width=True)
 
+    # Row 2: Region + Sector
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("行业分布")
-        st.plotly_chart(create_sector_concentration_chart(exposures), use_container_width=True)
+        st.subheader("Regional Allocation")
+        st.plotly_chart(create_region_distribution_chart(exposures), use_container_width=True)
     with col2:
-        st.subheader("到期分布")
+        st.subheader("Sector Allocation")
+        st.plotly_chart(create_sector_concentration_chart(exposures), use_container_width=True)
+
+    # Row 3: Currency + Maturity
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Currency Breakdown")
+        st.plotly_chart(create_currency_breakdown_chart(exposures), use_container_width=True)
+    with col2:
+        st.subheader("Maturity Profile")
         st.plotly_chart(create_maturity_profile_chart(exposures), use_container_width=True)
 
-    st.subheader("风险矩阵")
+    # Risk Heatmap
+    st.subheader("Risk Matrix (Rating × Duration)")
     st.plotly_chart(create_risk_heatmap(exposures), use_container_width=True)
 
 
+def render_panorama_page():
+    """Portfolio Panorama - Comprehensive risk analytics view"""
+    exposures = st.session_state.exposures
+    alerts = st.session_state.alerts
+    scheme = ColorScheme()
+
+    total_market = sum(e.total_market_usd for e in exposures)
+    total_dv01 = sum(e.credit_dv01_usd for e in exposures)
+
+    st.subheader("Portfolio Panorama | 组合全景图")
+
+    # Executive Summary Cards
+    st.markdown("### Executive Summary")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Calculate key metrics
+    ig_exposure = sum(e.total_market_usd for e in exposures if e.obligor.rating_internal.value in ["AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-"])
+    hy_exposure = total_market - ig_exposure
+    china_exposure = sum(e.total_market_usd for e in exposures if e.obligor.region in (Region.CHINA_OFFSHORE, Region.CHINA_ONSHORE))
+    dm_exposure = sum(e.total_market_usd for e in exposures if e.obligor.region in (Region.US, Region.EU, Region.UK, Region.JAPAN))
+    em_exposure = total_market - china_exposure - dm_exposure
+
+    with col1:
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:16px;border-radius:8px;border-left:4px solid {scheme.accent_green};">
+            <div style="color:{scheme.text_muted};font-size:12px;">Investment Grade</div>
+            <div style="color:{scheme.text_primary};font-size:24px;font-weight:600;">${ig_exposure/1e9:.2f}B</div>
+            <div style="color:{scheme.accent_green};font-size:14px;">{ig_exposure/total_market:.1%} of AUM</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:16px;border-radius:8px;border-left:4px solid {scheme.accent_red};">
+            <div style="color:{scheme.text_muted};font-size:12px;">High Yield / Sub-IG</div>
+            <div style="color:{scheme.text_primary};font-size:24px;font-weight:600;">${hy_exposure/1e9:.2f}B</div>
+            <div style="color:{scheme.accent_orange};font-size:14px;">{hy_exposure/total_market:.1%} of AUM</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col3:
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:16px;border-radius:8px;border-left:4px solid {scheme.accent_blue};">
+            <div style="color:{scheme.text_muted};font-size:12px;">Credit DV01 (Total)</div>
+            <div style="color:{scheme.text_primary};font-size:24px;font-weight:600;">${total_dv01/1e6:.2f}M</div>
+            <div style="color:{scheme.accent_blue};font-size:14px;">per 1bp spread move</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col4:
+        neg_outlook = len([e for e in exposures if e.obligor.rating_outlook in (RatingOutlook.NEGATIVE, RatingOutlook.WATCH_NEG)])
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:16px;border-radius:8px;border-left:4px solid {scheme.accent_yellow};">
+            <div style="color:{scheme.text_muted};font-size:12px;">Negative Outlook Issuers</div>
+            <div style="color:{scheme.text_primary};font-size:24px;font-weight:600;">{neg_outlook}</div>
+            <div style="color:{scheme.accent_yellow};font-size:14px;">{neg_outlook/len(exposures):.1%} of issuers</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # Geographic Breakdown Table
+    st.markdown("### Geographic Risk Decomposition")
+
+    region_data = []
+    for region in Region:
+        region_exps = [e for e in exposures if e.obligor.region == region]
+        if region_exps:
+            mv = sum(e.total_market_usd for e in region_exps)
+            dv01 = sum(e.credit_dv01_usd for e in region_exps)
+            avg_oas = sum(e.weighted_avg_oas * e.total_market_usd for e in region_exps) / mv if mv > 0 else 0
+            avg_dur = sum(e.weighted_avg_duration * e.total_market_usd for e in region_exps) / mv if mv > 0 else 0
+            region_data.append({
+                "Region": region.value.replace("_", " ").title(),
+                "MV ($M)": f"{mv/1e6:,.0f}",
+                "% AUM": f"{mv/total_market:.1%}",
+                "DV01 ($K)": f"{dv01/1e3:,.0f}",
+                "Wtd OAS (bp)": f"{avg_oas:.0f}",
+                "Wtd Duration": f"{avg_dur:.2f}",
+                "# Issuers": len(region_exps),
+            })
+
+    if region_data:
+        df_region = pd.DataFrame(region_data)
+        st.dataframe(df_region, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Sector Risk Table
+    st.markdown("### Sector Risk Decomposition")
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        sector_data = []
+        for sector in Sector:
+            sector_exps = [e for e in exposures if e.obligor.sector == sector]
+            if sector_exps:
+                mv = sum(e.total_market_usd for e in sector_exps)
+                dv01 = sum(e.credit_dv01_usd for e in sector_exps)
+                avg_oas = sum(e.weighted_avg_oas * e.total_market_usd for e in sector_exps) / mv if mv > 0 else 0
+                sector_data.append({
+                    "Sector": sector.value,
+                    "MV ($M)": f"{mv/1e6:,.0f}",
+                    "% AUM": f"{mv/total_market:.1%}",
+                    "DV01 ($K)": f"{dv01/1e3:,.0f}",
+                    "Wtd OAS": f"{avg_oas:.0f}bp",
+                })
+
+        if sector_data:
+            df_sector = pd.DataFrame(sector_data)
+            st.dataframe(df_sector, use_container_width=True, hide_index=True)
+
+    with col2:
+        st.plotly_chart(create_dv01_decomposition_chart(exposures), use_container_width=True)
+
+    st.divider()
+
+    # Top Risk Exposures
+    st.markdown("### Top 10 Risk Exposures (by Credit DV01)")
+
+    sorted_by_dv01 = sorted(exposures, key=lambda x: x.credit_dv01_usd, reverse=True)[:10]
+    top_risk_data = []
+    for exp in sorted_by_dv01:
+        top_risk_data.append({
+            "Issuer": exp.obligor.display_name,
+            "Sector": exp.obligor.sector.value,
+            "Region": exp.obligor.region.value.replace("_", " ").title(),
+            "Rating": exp.obligor.rating_internal.value,
+            "Outlook": exp.obligor.rating_outlook.value,
+            "MV ($M)": f"{exp.total_market_usd/1e6:,.0f}",
+            "Duration": f"{exp.weighted_avg_duration:.2f}",
+            "OAS (bp)": f"{exp.weighted_avg_oas:.0f}",
+            "DV01 ($K)": f"{exp.credit_dv01_usd/1e3:,.0f}",
+        })
+
+    df_top_risk = pd.DataFrame(top_risk_data)
+    st.dataframe(df_top_risk, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Watchlist - Negative Outlook Issuers
+    st.markdown("### Watchlist: Negative Outlook / Under Review")
+
+    watchlist = [e for e in exposures if e.obligor.rating_outlook in (RatingOutlook.NEGATIVE, RatingOutlook.WATCH_NEG)]
+    if watchlist:
+        watchlist_data = []
+        for exp in sorted(watchlist, key=lambda x: x.total_market_usd, reverse=True):
+            watchlist_data.append({
+                "Issuer": exp.obligor.display_name,
+                "Sector": exp.obligor.sector.value,
+                "Region": exp.obligor.region.value.replace("_", " ").title(),
+                "Rating": exp.obligor.rating_internal.value,
+                "Outlook": "⚠️ " + exp.obligor.rating_outlook.value,
+                "MV ($M)": f"{exp.total_market_usd/1e6:,.0f}",
+                "% AUM": f"{exp.pct_of_aum:.2%}",
+                "OAS (bp)": f"{exp.weighted_avg_oas:.0f}",
+            })
+        df_watchlist = pd.DataFrame(watchlist_data)
+        st.dataframe(df_watchlist, use_container_width=True, hide_index=True)
+    else:
+        st.success("No issuers on negative outlook watchlist")
+
+    st.divider()
+
+    # Maturity Wall Analysis
+    st.markdown("### Maturity Wall Analysis (Next 12 Months)")
+
+    # Aggregate bonds maturing in next 12 months by issuer
+    maturity_wall = []
+    for exp in exposures:
+        maturing_bonds = [b for b in exp.bonds if b.years_to_maturity <= 1.0]
+        if maturing_bonds:
+            maturing_mv = sum(b.market_value_usd for b in maturing_bonds)
+            maturity_wall.append({
+                "Issuer": exp.obligor.display_name,
+                "Rating": exp.obligor.rating_internal.value,
+                "Region": exp.obligor.region.value.replace("_", " ").title(),
+                "Maturing MV ($M)": f"{maturing_mv/1e6:,.0f}",
+                "% of Issuer Total": f"{maturing_mv/exp.total_market_usd:.1%}" if exp.total_market_usd > 0 else "N/A",
+                "Bonds Maturing": len(maturing_bonds),
+            })
+
+    if maturity_wall:
+        maturity_wall = sorted(maturity_wall, key=lambda x: float(x["Maturing MV ($M)"].replace(",", "")), reverse=True)
+        df_maturity = pd.DataFrame(maturity_wall[:15])
+        st.dataframe(df_maturity, use_container_width=True, hide_index=True)
+
+        total_maturing = sum(float(m["Maturing MV ($M)"].replace(",", "")) for m in maturity_wall)
+        st.caption(f"**Total maturing in 12M:** ${total_maturing:,.0f}M ({total_maturing*1e6/total_market:.1%} of AUM)")
+    else:
+        st.info("No significant maturities in the next 12 months")
+
+
+def render_issuer_page():
+    """Issuer Detail Page - Deep dive into individual obligors"""
+    exposures = st.session_state.exposures
+    obligors = st.session_state.obligors
+    alerts = st.session_state.alerts
+    news_items = st.session_state.news
+    scheme = ColorScheme()
+
+    st.subheader("Issuer Analysis | 发行人分析")
+
+    # Issuer selector
+    sorted_exposures = sorted(exposures, key=lambda x: x.total_market_usd, reverse=True)
+    issuer_options = {e.obligor.obligor_id: f"{e.obligor.display_name} (${e.total_market_usd/1e6:.0f}M)" for e in sorted_exposures}
+
+    selected_id = st.selectbox(
+        "Select Issuer",
+        options=list(issuer_options.keys()),
+        format_func=lambda x: issuer_options[x],
+    )
+
+    if not selected_id:
+        st.info("Select an issuer to view details")
+        return
+
+    # Get selected exposure
+    exp = next((e for e in exposures if e.obligor.obligor_id == selected_id), None)
+    if not exp:
+        return
+
+    obligor = exp.obligor
+
+    st.divider()
+
+    # Issuer Header Card
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        # Rating badge color
+        rating_color = ColorScheme.get_rating_color(obligor.rating_internal.value)
+        outlook_icon = {"POSITIVE": "📈", "STABLE": "➡️", "NEGATIVE": "📉", "WATCH_NEG": "⚠️"}.get(obligor.rating_outlook.value, "")
+
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:20px;border-radius:12px;border-left:5px solid {ColorScheme.get_sector_color(obligor.sector.value)};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                <div>
+                    <h2 style="color:{scheme.text_primary};margin:0;">{obligor.display_name}</h2>
+                    <p style="color:{scheme.text_muted};margin:4px 0;">{obligor.name_cn if obligor.name_en else ''}</p>
+                </div>
+                <div style="text-align:right;">
+                    <span style="background:{rating_color};color:white;padding:6px 12px;border-radius:6px;font-weight:600;font-size:18px;">
+                        {obligor.rating_internal.value}
+                    </span>
+                    <p style="color:{scheme.text_muted};margin:8px 0 0 0;">{outlook_icon} {obligor.rating_outlook.value}</p>
+                </div>
+            </div>
+            <div style="margin-top:16px;display:flex;gap:24px;flex-wrap:wrap;">
+                <div><span style="color:{scheme.text_muted};">Sector:</span> <span style="color:{scheme.text_primary};">{obligor.sector.value}</span></div>
+                <div><span style="color:{scheme.text_muted};">Region:</span> <span style="color:{scheme.text_primary};">{obligor.region.value.replace('_', ' ').title()}</span></div>
+                <div><span style="color:{scheme.text_muted};">Country:</span> <span style="color:{scheme.text_primary};">{obligor.country or 'N/A'}</span></div>
+                {f'<div><span style="color:{scheme.text_muted};">Ticker:</span> <span style="color:{scheme.accent_blue};">{obligor.ticker}</span></div>' if obligor.ticker else ''}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        # Key metrics
+        st.markdown(f"""
+        <div style="background:{scheme.bg_secondary};padding:20px;border-radius:12px;">
+            <h4 style="color:{scheme.text_primary};margin:0 0 12px 0;">Exposure Summary</h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                    <div style="color:{scheme.text_muted};font-size:12px;">Market Value</div>
+                    <div style="color:{scheme.text_primary};font-size:20px;font-weight:600;">${exp.total_market_usd/1e6:,.0f}M</div>
+                </div>
+                <div>
+                    <div style="color:{scheme.text_muted};font-size:12px;">% of AUM</div>
+                    <div style="color:{scheme.text_primary};font-size:20px;font-weight:600;">{exp.pct_of_aum:.2%}</div>
+                </div>
+                <div>
+                    <div style="color:{scheme.text_muted};font-size:12px;">Wtd Duration</div>
+                    <div style="color:{scheme.text_primary};font-size:20px;font-weight:600;">{exp.weighted_avg_duration:.2f}Y</div>
+                </div>
+                <div>
+                    <div style="color:{scheme.text_muted};font-size:12px;">Wtd OAS</div>
+                    <div style="color:{scheme.text_primary};font-size:20px;font-weight:600;">{exp.weighted_avg_oas:.0f}bp</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # Bond Holdings Table
+    st.markdown("### Bond Holdings")
+
+    bond_data = []
+    for bond in sorted(exp.bonds, key=lambda b: b.maturity_date):
+        bond_data.append({
+            "ISIN": bond.isin,
+            "Currency": bond.currency,
+            "Coupon": f"{bond.coupon:.2f}%",
+            "Maturity": bond.maturity_date.strftime("%Y-%m-%d"),
+            "YTM (yrs)": f"{bond.years_to_maturity:.1f}",
+            "Nominal ($M)": f"{bond.nominal_usd/1e6:,.1f}",
+            "MV ($M)": f"{bond.market_value_usd/1e6:,.1f}",
+            "Duration": f"{bond.duration:.2f}",
+            "OAS (bp)": f"{bond.oas:.0f}" if bond.oas else "N/A",
+        })
+
+    if bond_data:
+        df_bonds = pd.DataFrame(bond_data)
+        st.dataframe(df_bonds, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Peer Comparison
+    st.markdown("### Peer Comparison")
+
+    # Find peers (same sector, similar rating)
+    peer_exposures = [e for e in exposures
+                      if e.obligor.sector == obligor.sector
+                      and e.obligor.obligor_id != obligor.obligor_id][:5]
+
+    if peer_exposures:
+        peer_data = [{"Issuer": obligor.display_name, "Rating": obligor.rating_internal.value,
+                      "MV ($M)": f"{exp.total_market_usd/1e6:,.0f}",
+                      "Duration": f"{exp.weighted_avg_duration:.2f}",
+                      "OAS (bp)": f"{exp.weighted_avg_oas:.0f}", "Type": "Selected"}]
+
+        for peer in peer_exposures:
+            peer_data.append({
+                "Issuer": peer.obligor.display_name,
+                "Rating": peer.obligor.rating_internal.value,
+                "MV ($M)": f"{peer.total_market_usd/1e6:,.0f}",
+                "Duration": f"{peer.weighted_avg_duration:.2f}",
+                "OAS (bp)": f"{peer.weighted_avg_oas:.0f}",
+                "Type": "Peer",
+            })
+
+        df_peers = pd.DataFrame(peer_data)
+        st.dataframe(df_peers, use_container_width=True, hide_index=True)
+
+        # OAS comparison chart
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[obligor.display_name] + [p.obligor.display_name for p in peer_exposures],
+            y=[exp.weighted_avg_oas] + [p.weighted_avg_oas for p in peer_exposures],
+            marker_color=[scheme.accent_blue] + [scheme.text_muted] * len(peer_exposures),
+        ))
+        fig.update_layout(**get_premium_layout("OAS Comparison vs Peers", height=300))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No peers found in the same sector")
+
+    st.divider()
+
+    # Related Alerts
+    st.markdown("### Related Alerts")
+    issuer_alerts = [a for a in alerts if a.obligor_id == selected_id]
+    if issuer_alerts:
+        for alert in issuer_alerts:
+            severity_color = ColorScheme.get_severity_color(alert.severity.value)
+            st.markdown(f"""
+            <div style="background:{scheme.bg_secondary};padding:12px 16px;margin:8px 0;border-radius:8px;border-left:4px solid {severity_color};">
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:{scheme.text_primary};font-weight:600;">{alert.message}</span>
+                    <span style="color:{scheme.text_muted};font-size:12px;">{alert.timestamp.strftime('%m-%d %H:%M')}</span>
+                </div>
+                {f'<div style="color:{scheme.text_secondary};margin-top:8px;font-size:14px;">{alert.ai_summary}</div>' if alert.ai_summary else ''}
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.success("No active alerts for this issuer")
+
+    # Related News
+    st.markdown("### Related News")
+    issuer_news = [n for n in news_items if selected_id in n.obligor_ids]
+    if issuer_news:
+        for news in issuer_news[:5]:
+            sentiment_color = {
+                Sentiment.POSITIVE: scheme.severity_success,
+                Sentiment.NEUTRAL: scheme.text_secondary,
+                Sentiment.NEGATIVE: scheme.severity_critical,
+            }.get(news.sentiment, scheme.text_secondary)
+
+            st.markdown(f"""
+            <div style="background:{scheme.bg_secondary};padding:12px 16px;margin:8px 0;border-radius:8px;border-left:3px solid {sentiment_color};">
+                <div style="display:flex;justify-content:space-between;">
+                    <span style="color:{scheme.text_primary};font-weight:500;">{news.title}</span>
+                    <span style="color:{scheme.text_muted};font-size:12px;">{news.timestamp.strftime('%m-%d %H:%M')} · {news.source}</span>
+                </div>
+                <div style="color:{scheme.text_secondary};margin-top:6px;font-size:14px;">{news.summary or ''}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("No recent news for this issuer")
+
+
 def render_alerts_page():
-    st.subheader("🚨 预警中心")
+    st.subheader("🚨 Alerts Center")
     alerts = st.session_state.alerts
 
     col1, col2, col3, col4 = st.columns(4)
@@ -682,9 +1346,9 @@ def render_news_page():
         """, unsafe_allow_html=True)
 
         if news.obligor_ids:
-            names = [st.session_state.obligors[oid].name_cn for oid in news.obligor_ids if oid in st.session_state.obligors]
+            names = [st.session_state.obligors[oid].display_name for oid in news.obligor_ids if oid in st.session_state.obligors]
             if names:
-                st.caption(f"关联发行人: {', '.join(names)}")
+                st.caption(f"Related Issuers: {', '.join(names)}")
 
 
 def render_chat_page():
@@ -743,15 +1407,29 @@ def main():
     # Sidebar
     with st.sidebar:
         st.title("📊 Credit Intelligence")
-        st.caption("信用债风险预警平台")
+        st.caption("Global Credit Risk Platform | 信用债风险预警平台")
         st.divider()
 
         page = st.radio(
-            "导航", options=["overview", "alerts", "news", "chat"],
-            format_func=lambda x: {"overview": "📈 组合概览", "alerts": "🚨 预警中心", "news": "📰 新闻流", "chat": "💬 AI问答"}[x],
+            "Navigation", options=["overview", "panorama", "issuer", "alerts", "news", "chat"],
+            format_func=lambda x: {
+                "overview": "📈 Overview",
+                "panorama": "🌍 Panorama",
+                "issuer": "🏢 Issuer",
+                "alerts": "🚨 Alerts",
+                "news": "📰 News",
+                "chat": "💬 AI Q&A"
+            }[x],
             label_visibility="collapsed",
         )
         st.session_state.active_page = page
+
+        st.divider()
+
+        # Quick Stats
+        exposures = st.session_state.exposures
+        total_mv = sum(e.total_market_usd for e in exposures)
+        st.caption(f"**AUM:** ${total_mv/1e9:.1f}B | **Issuers:** {len(exposures)}")
 
         st.divider()
 
@@ -760,15 +1438,15 @@ def main():
         critical = len([a for a in alerts if a.severity == Severity.CRITICAL])
 
         if critical > 0:
-            st.error(f"🔴 {critical} 条严重预警待处理")
+            st.error(f"🔴 {critical} critical alerts pending")
         elif pending > 0:
-            st.warning(f"🟡 {pending} 条预警待处理")
+            st.warning(f"🟡 {pending} alerts pending")
         else:
-            st.success("✅ 无待处理预警")
+            st.success("✅ No pending alerts")
 
         st.divider()
 
-        if st.button("🔄 刷新数据", use_container_width=True):
+        if st.button("🔄 Refresh Data", use_container_width=True):
             obligors, exposures, alerts, news = generate_mock_data()
             st.session_state.obligors = obligors
             st.session_state.exposures = exposures
@@ -776,11 +1454,18 @@ def main():
             st.session_state.news = news
             st.rerun()
 
+        st.divider()
+        st.caption("v2.0 | Phase 4 Complete")
+
     # Main content
     st.title("Credit Intelligence Platform")
 
     if st.session_state.active_page == "overview":
         render_overview_page()
+    elif st.session_state.active_page == "panorama":
+        render_panorama_page()
+    elif st.session_state.active_page == "issuer":
+        render_issuer_page()
     elif st.session_state.active_page == "alerts":
         render_alerts_page()
     elif st.session_state.active_page == "news":

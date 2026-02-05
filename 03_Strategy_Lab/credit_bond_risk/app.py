@@ -343,8 +343,9 @@ def create_concentration_chart(exposures: list[CreditExposure], top_n: int = 15)
         textposition="outside",
         hovertemplate="<b>%{y}</b><br>市值: $%{x:.0f}M<extra></extra>",
     ))
-    fig.update_layout(**get_premium_layout("Top发行人持仓", height=max(400, top_n * 30)),
-                      yaxis=dict(autorange="reversed"), showlegend=False)
+    fig.update_layout(**get_premium_layout("Top发行人持仓", height=max(400, top_n * 30)))
+    fig.update_layout(showlegend=False)
+    fig.update_yaxes(autorange="reversed")
     return fig
 
 
@@ -362,7 +363,8 @@ def create_rating_distribution_chart(exposures: list[CreditExposure]) -> go.Figu
         labels=labels, values=values, hole=0.5, marker_colors=colors,
         textinfo="label+percent", textposition="outside",
     )])
-    fig.update_layout(**get_premium_layout("评级分布", height=400), showlegend=False)
+    fig.update_layout(**get_premium_layout("评级分布", height=400))
+    fig.update_layout(showlegend=False)
     return fig
 
 
@@ -396,7 +398,8 @@ def create_sector_concentration_chart(exposures: list[CreditExposure]) -> go.Fig
     colors = [ColorScheme.get_sector_color(s) for s in labels]
 
     fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.6, marker_colors=colors)])
-    fig.update_layout(**get_premium_layout("行业分布", height=350), showlegend=True)
+    fig.update_layout(**get_premium_layout("行业分布", height=350))
+    fig.update_layout(showlegend=True)
     return fig
 
 
@@ -434,8 +437,8 @@ def create_risk_heatmap(exposures: list[CreditExposure]) -> go.Figure:
         text=[[f"${v:.0f}M" for v in row] for row in matrix],
         texttemplate="%{text}", textfont={"size": 12},
     ))
-    fig.update_layout(**get_premium_layout("风险矩阵 (评级 × 久期)", height=350),
-                      yaxis=dict(autorange="reversed"))
+    fig.update_layout(**get_premium_layout("风险矩阵 (评级 × 久期)", height=350))
+    fig.update_yaxes(autorange="reversed")
     return fig
 
 

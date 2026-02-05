@@ -215,6 +215,47 @@ credit_bond_risk/
 │       ├── Sentiment              # 情感倾向
 │       └── SignalCategory         # 信号类别
 │
+├── data/                    # 数据层 - 数据获取与解析 (NEW)
+│   ├── __init__.py          # 统一导出接口
+│   ├── provider.py          # 抽象数据接口 (Strategy Pattern)
+│   │   ├── DataProvider (ABC)     # 数据提供者抽象基类
+│   │   ├── DataProviderConfig     # 数据源配置
+│   │   └── get_data_provider()    # 工厂函数
+│   │
+│   ├── mock_data.py         # Mock数据生成器
+│   │   ├── MockDataProvider       # Mock数据提供者实现
+│   │   ├── generate_mock_obligors()   # 生成发行人
+│   │   ├── generate_mock_exposures()  # 生成曝光
+│   │   ├── generate_mock_alerts()     # 生成预警
+│   │   └── generate_mock_news()       # 生成新闻
+│   │
+│   ├── market_data.py       # 市场数据服务 (BBG/Wind)
+│   │   ├── MarketDataService      # 统一市场数据接口
+│   │   ├── BloombergFetcher       # Bloomberg数据 (xbbg)
+│   │   ├── WindFetcher            # Wind数据 (WindPy)
+│   │   ├── PriceQuote             # 实时报价模型
+│   │   └── SpreadHistory          # 历史利差数据
+│   │
+│   ├── news_fetcher.py      # 新闻聚合服务
+│   │   ├── NewsAggregator         # 多源新闻聚合器
+│   │   ├── BloombergFetcher       # Bloomberg RSS
+│   │   ├── ReutersFetcher         # Reuters RSS
+│   │   ├── FTFetcher              # FT RSS
+│   │   ├── WSJFetcher             # WSJ RSS
+│   │   ├── CLSFetcher             # 财联社 API
+│   │   ├── EastMoneyFetcher       # 东方财富 API
+│   │   ├── CaixinFetcher          # 财新 API
+│   │   ├── RawNewsItem            # 原始新闻数据
+│   │   └── AnalyzedNewsItem       # 分析后新闻
+│   │
+│   └── filing_parser.py     # 公告/财报解析器
+│       ├── FilingParser           # 统一解析接口
+│       ├── PDFFilingParser        # PDF解析 (pdfplumber)
+│       ├── EDGARParser            # SEC EDGAR解析
+│       ├── ParsedFiling           # 解析结果模型
+│       ├── FinancialMetrics       # 财务指标提取
+│       └── DebtMaturity           # 到期债务提取
+│
 ├── signals/                 # 信号层 - Athena风格信号系统
 │   ├── base.py              # Signal抽象基类 + SignalContext + SignalRegistry
 │   ├── concentration.py     # 集中度信号
@@ -252,12 +293,97 @@ credit_bond_risk/
 │
 ├── scripts/                 # 运维脚本
 │   ├── init_db.py           # 初始化信用数据库
-│   └── sync_news.py         # 定时同步新闻
+│   └── sync_news.py         # 定时同步新闻 (uses data.news_fetcher)
 │
 └── app.py                   # Streamlit独立入口
 ```
 
-### 3.2 Data Flow
+### 3.2 Data Layer Design (NEW)
+
+数据层采用**Strategy Pattern**实现数据源的可插拔设计，支持多种数据来源无缝切换。
+
+#### 3.2.1 DataProvider 抽象接口
+
+```python
+from data import get_data_provider, DataProviderType
+
+# Mock数据 (测试/演示)
+provider = get_data_provider(DataProviderType.MOCK)
+
+# 数据库 (生产环境)
+provider = get_data_provider(DataProviderType.DATABASE)
+
+# 使用统一API
+obligors = provider.get_obligors()           # 发行人主数据
+exposures = provider.get_exposures()         # 信用曝光
+alerts = provider.get_alerts(status="PENDING")  # 预警
+news = provider.get_news(days=7)             # 新闻
+```
+
+#### 3.2.2 Market Data Service
+
+```python
+from data.market_data import MarketDataService, MarketDataSource
+
+service = MarketDataService()
+
+# 获取实时报价 (自动选择可用数据源)
+quote = service.get_quote("US912828ZT05")
+print(f"OAS: {quote.oas}bp, Duration: {quote.duration}")
+
+# 获取历史利差
+history = service.get_spread_history("US912828ZT05", days=252)
+zscore = history.get_zscore(quote.oas)
+percentile = history.get_percentile(quote.oas)
+```
+
+#### 3.2.3 News Aggregator
+
+```python
+from data.news_fetcher import NewsAggregator, NewsSource
+
+aggregator = NewsAggregator()
+
+# 获取所有来源新闻
+news = aggregator.fetch_all(days=7)
+
+# 仅国际新闻
+news = aggregator.fetch_all(include_domestic=False)
+
+# 单一来源
+news = aggregator.fetch_source(NewsSource.BLOOMBERG)
+
+# LLM分析
+analyzed = aggregator.analyze(news, use_llm=True)
+```
+
+#### 3.2.4 Filing Parser
+
+```python
+from data.filing_parser import FilingParser, FilingType
+
+parser = FilingParser()
+
+# 解析年报PDF
+result = parser.parse_file("annual_report.pdf", FilingType.ANNUAL_REPORT)
+print(f"Revenue: {result.financials.revenue}")
+print(f"Debt/EBITDA: {result.financials.debt_to_ebitda}")
+
+# 解析SEC EDGAR
+result = parser.parse_url("https://sec.gov/...", FilingType.SEC_10K)
+```
+
+#### 3.2.5 设计优势
+
+| 特性 | 说明 |
+|------|------|
+| **可插拔** | 数据源通过配置切换，代码无需修改 |
+| **可测试** | Mock Provider支持单元测试和演示 |
+| **可扩展** | 新增数据源只需实现抽象接口 |
+| **缓存** | 内置缓存层，减少重复请求 |
+| **类型安全** | 所有数据模型使用Pydantic强类型 |
+
+### 3.3 Data Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -775,7 +901,7 @@ if st.button("查看信用风险详情"):
 - [x] **Phase 3**: Intelligence layer (LLM + RAG + Embeddings)
 - [x] **Phase 4**: Dashboard MVP (Streamlit multi-page)
 - [x] **Phase 5**: International issuers support
-- [ ] **Phase 6**: News fetcher integration (RSS/API)
+- [x] **Phase 6**: Data layer refactoring (Provider pattern, News/Market/Filing modules)
 - [ ] **Phase 7**: Alert workflow automation
 - [ ] **Phase 8**: Mobile notifications (企业微信)
 - [ ] **Phase 9**: Historical backtesting framework
@@ -804,6 +930,11 @@ python scripts/sync_news.py
 |------|---------|
 | `core/config.py` | 所有配置定义 |
 | `core/models.py` | 所有数据模型 |
+| `data/provider.py` | 数据提供者抽象接口 |
+| `data/mock_data.py` | Mock数据生成器 |
+| `data/market_data.py` | 市场数据服务 (BBG/Wind) |
+| `data/news_fetcher.py` | 新闻聚合服务 |
+| `data/filing_parser.py` | 公告/财报解析器 |
 | `signals/base.py` | Signal抽象基类 |
 | `intelligence/rag_engine.py` | RAG问答引擎 |
 | `ui/dashboard.py` | 主Dashboard |
@@ -811,4 +942,4 @@ python scripts/sync_news.py
 ---
 
 *Last Updated: 2026-02*
-*Version: 2.0*
+*Version: 2.1 (Data Layer Refactoring)*

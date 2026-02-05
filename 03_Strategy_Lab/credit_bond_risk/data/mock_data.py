@@ -143,6 +143,7 @@ def generate_mock_obligors() -> dict[str, Obligor]:
             obligor_id=oid,
             name_cn=name_cn,
             name_en=name_en,
+            ticker=ticker,
             sector=sector,
             sub_sector=sub,
             region=region,

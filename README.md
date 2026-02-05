@@ -4,6 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Database](https://img.shields.io/badge/Data-DuckDB%20%7C%20Parquet-yellow.svg)
 ![Architecture](https://img.shields.io/badge/Architecture-Quant--Macro%20Hybrid-red.svg)
+![AI](https://img.shields.io/badge/AI-Claude%20%7C%20RAG%20%7C%20Embeddings-purple.svg)
 ![Status](https://img.shields.io/badge/Status-Active%20(2026%20Plan)-success.svg)
 
 ## Executive Summary
@@ -14,6 +15,7 @@
 1.  **影子账本 (Shadow PMS)**：独立于核心银行系统的持仓与现金流计算引擎
 2.  **宏观对冲 (Macro Hedging)**：基于利率二阶导数（Convexity/Gamma）和宏观因子的策略生成
 3.  **可携带 Alpha (Portable Alpha)**：将投资经理的决策逻辑代码化，使其不依赖于特定机构的 IT 设施
+4.  **信用智能 (Credit Intelligence)**：LLM增强的信用债预警系统，融合传统信用分析与AI分析能力
 
 ---
 
@@ -25,13 +27,18 @@
 Project_Omega_2026/
 ├── 00_Config/               # [Config] API Keys, Ticker Mapping, Curve Config
 ├── 01_Data_Warehouse/       # [Data Layer] DuckDB + ETL Scripts
-│   ├── db/                  # Database files
+│   ├── db/                  # Database files (portfolio.duckdb)
 │   ├── raw_landing/         # Raw data staging
 │   └── etl_scripts/         # Data ingestion & transformation
 │
 ├── 03_Strategy_Lab/         # [Decision Layer] Strategy & Allocation Engine
 │   ├── 2026_Investment_Plan/# Investment hypothesis & analysis
-│   └── 2026_allocation_plan/# Core allocation engine (Pydantic + Streamlit)
+│   ├── 2026_allocation_plan/# Core allocation engine (Pydantic + Streamlit)
+│   └── credit_bond_risk/    # 🆕 Credit Intelligence Platform (LLM + RAG)
+│       ├── core/            # Domain models & config
+│       ├── signals/         # JPM Athena-style signal library
+│       ├── intelligence/    # LLM, RAG, embeddings
+│       └── ui/              # Streamlit dashboard
 │
 ├── 05_Dashboard_UI/         # [Presentation Layer] Streamlit Entry Point
 │
@@ -60,6 +67,8 @@ Project_Omega_2026/
   - RWA (风险加权资产) 约束
   - FX P&L Buffer (汇率折算安全垫)
 
+---
+
 ## Key Modules
 
 ### A. Data Warehouse (`01_Data_Warehouse/`)
@@ -73,11 +82,30 @@ Project_Omega_2026/
 - `allocation_engine.py`: 多币种 NII 优化逻辑
 - `dashboard.py`: Streamlit 交互式情景分析
 
-### C. Dashboard (`05_Dashboard_UI/`)
+### C. Credit Bond Risk Intelligence (`03_Strategy_Lab/credit_bond_risk/`) 🆕
+**融合四大顶级机构设计理念的信用风险预警平台：**
+
+| Design Source | Concept | Implementation |
+|---------------|---------|----------------|
+| **BlackRock Aladdin** | Unified Risk View | 多数据源 → 发行人单一视图 → 预警 → 行动 |
+| **JPM Athena** | Signal Library | 风险信号标准化为可组合的 `Signal` 对象 |
+| **LLM Native** | RAG + Summarization | 新闻/公告 → Embedding → 检索 → 摘要 |
+| **ML Ops** | Feature Store | 发行人特征向量化，支持相似性搜索 |
+
+**Core Capabilities:**
+- **信号系统**: Concentration / Rating / Spread / News Sentiment
+- **AI增强**: Claude LLM 新闻摘要 + 情感分析 + RAG 问答
+- **向量搜索**: text-embedding-3-small 文本向量化
+- **实时监控**: Streamlit Dashboard + Alert Workflow
+
+### D. Dashboard (`05_Dashboard_UI/`)
 - Streamlit 入口，支持实时调节：
   - USD/AUD 投入规模 (Firepower)
   - 目标建仓收益率 (Entry Yield)
   - 汇率压力测试 (FX Stress Test)
+  - 信用风险预警监控
+
+---
 
 ## Getting Started
 
@@ -96,9 +124,16 @@ python init_db.py
 
 ### 3. 启动配置仪表盘
 ```bash
+# 2026 Allocation Dashboard
 cd 03_Strategy_Lab/2026_allocation_plan
 streamlit run dashboard.py
+
+# Credit Risk Intelligence Dashboard
+cd 03_Strategy_Lab/credit_bond_risk
+streamlit run app.py
 ```
+
+---
 
 ## AI Interaction Protocol
 
@@ -112,6 +147,24 @@ streamlit run dashboard.py
    - 输入 "复盘"：触发每日总结模式
    - 输入 "Stress Test"：触发情景分析代码生成
 
+---
+
+## Tech Stack
+
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| **Database** | DuckDB 0.9+ | OLAP, single-file portability |
+| **Data Format** | Parquet, JSON | Time-series tick data |
+| **Validation** | Pydantic v2 | Type-safe config, data models |
+| **Quant** | QuantLib, SciPy | Bond pricing, optimization |
+| **Data Science** | Pandas, NumPy, Polars | Vectorized operations |
+| **Visualization** | Streamlit, Plotly | Interactive dashboards |
+| **LLM Integration** | Claude API (Sonnet/Haiku) | News analysis, RAG |
+| **Vector Embeddings** | OpenAI text-embedding-3-small | Semantic search |
+| **Data Ingestion** | xbbg, office365-rest-python-client | Bloomberg, SharePoint |
+
+---
+
 ## Disclaimer
 
 - **Institutional Use Only**: 本系统参数基于 $50B+ 机构资产负债表设定，不适用于个人零售投资者
@@ -119,6 +172,6 @@ streamlit run dashboard.py
 
 ---
 
-**Project Omega** - Building the bridge between Math, Macro, and Management.
+**Project Omega** - Building the bridge between Math, Macro, and AI.
 
 *Managed by the CIO Office*

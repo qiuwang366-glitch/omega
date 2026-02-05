@@ -322,4 +322,4 @@ python scripts/backfill_embeddings.py
 
 ---
 
-*Last Updated: 2024-01*
+*Last Updated: 2026-01*

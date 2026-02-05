@@ -9,11 +9,41 @@ from enum import Enum
 
 class Sector(str, Enum):
     """发行人一级行业分类"""
+    # China Onshore/Offshore
     LGFV = "LGFV"              # 城投平台
     SOE = "SOE"                # 国有企业 (非城投)
     FINANCIAL = "FINANCIAL"    # 金融机构
     CORP = "CORP"              # 民营企业
     SOVEREIGN = "SOVEREIGN"    # 主权/准主权
+    # International
+    DM_SOVEREIGN = "DM_SOVEREIGN"      # G10 Sovereign
+    EM_SOVEREIGN = "EM_SOVEREIGN"      # EM Sovereign
+    SUPRA = "SUPRA"                    # Supranational (WB, ADB, AIIB)
+    US_CORP = "US_CORP"                # US Corporates
+    EU_CORP = "EU_CORP"                # European Corporates
+    G_SIB = "G-SIB"                    # Global Systemically Important Banks
+    EM_FIN = "EM_FIN"                  # EM Financials
+    HY = "HY"                          # High Yield (cross-region)
+
+
+class Region(str, Enum):
+    """地区分类"""
+    # China
+    CHINA_ONSHORE = "CHINA_ONSHORE"
+    CHINA_OFFSHORE = "CHINA_OFFSHORE"
+    # Developed Markets
+    US = "US"
+    EU = "EU"
+    UK = "UK"
+    JAPAN = "JAPAN"
+    AUSTRALIA = "AUSTRALIA"
+    CANADA = "CANADA"
+    # Emerging Markets
+    LATAM = "LATAM"           # Latin America
+    CEEMEA = "CEEMEA"         # Central Europe, Middle East, Africa
+    ASIA_EX_CHINA = "ASIA_EX_CHINA"
+    # Supranational
+    SUPRANATIONAL = "SUPRANATIONAL"
 
 
 class SubSector(str, Enum):
@@ -28,7 +58,7 @@ class SubSector(str, Enum):
     SOE_CENTRAL = "央企"
     SOE_LOCAL = "地方国企"
 
-    # Financial
+    # Financial - China
     FIN_POLICY_BANK = "政策性银行"
     FIN_STATE_BANK = "国有大行"
     FIN_JOINT_STOCK = "股份制银行"
@@ -39,13 +69,36 @@ class SubSector(str, Enum):
     FIN_AMC = "资产管理"
     FIN_LEASING = "金融租赁"
 
-    # Corp
+    # Financial - International
+    FIN_G_SIB = "G-SIB"                    # Global Systemically Important Bank
+    FIN_REGIONAL_BANK = "Regional Bank"
+    FIN_INVESTMENT_BANK = "Investment Bank"
+    FIN_INSURANCE_INTL = "Insurance (Intl)"
+    FIN_ASSET_MANAGER = "Asset Manager"
+
+    # Corp - China
     CORP_REAL_ESTATE = "房地产"
     CORP_INDUSTRIAL = "工业制造"
     CORP_TECH = "科技"
     CORP_CONSUMER = "消费"
     CORP_UTILITY = "公用事业"
     CORP_OTHER = "其他"
+
+    # Corp - International
+    CORP_TECH_US = "US Tech"
+    CORP_ENERGY = "Energy"
+    CORP_HEALTHCARE = "Healthcare"
+    CORP_AUTO = "Auto"
+    CORP_TELECOM = "Telecom"
+    CORP_RETAIL = "Retail"
+    CORP_INDUSTRIAL_INTL = "Industrial"
+
+    # Sovereign/Supra
+    SOV_G10 = "G10 Sovereign"
+    SOV_EM_IG = "EM IG Sovereign"
+    SOV_EM_HY = "EM HY Sovereign"
+    SUPRA_MDB = "Multilateral Development Bank"
+    SUPRA_AGENCY = "Government Agency"
 
 
 class CreditRating(str, Enum):

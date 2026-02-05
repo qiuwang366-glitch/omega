@@ -7,12 +7,14 @@ Core data models, configuration, and enums for the credit risk monitoring system
 from .enums import (
     Sector,
     SubSector,
+    Region,
     CreditRating,
     RatingOutlook,
     Severity,
     AlertCategory,
     AlertStatus,
     Sentiment,
+    SignalCategory,
 )
 from .models import (
     Obligor,
@@ -37,12 +39,14 @@ __all__ = [
     # Enums
     "Sector",
     "SubSector",
+    "Region",
     "CreditRating",
     "RatingOutlook",
     "Severity",
     "AlertCategory",
     "AlertStatus",
     "Sentiment",
+    "SignalCategory",
     # Models
     "Obligor",
     "BondPosition",

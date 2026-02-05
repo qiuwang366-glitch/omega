@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 from .enums import (
     Sector,
     SubSector,
+    Region,
     CreditRating,
     RatingOutlook,
     Severity,
@@ -39,7 +40,9 @@ class Obligor(BaseModel):
     # 分类
     sector: Sector = Field(..., description="一级行业")
     sub_sector: str = Field(..., description="二级行业")
-    province: str | None = Field(None, description="省份")
+    region: Region = Field(Region.CHINA_OFFSHORE, description="地区")
+    country: str | None = Field(None, description="国家 (ISO 3166-1 alpha-2)")
+    province: str | None = Field(None, description="省份(中国)/州(美国)")
     city: str | None = Field(None, description="城市")
 
     # 评级

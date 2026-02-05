@@ -48,6 +48,23 @@ When working on this codebase, be aware of these key modules:
 | `config` | `03_Strategy_Lab/2026_allocation_plan/` | Pydantic-based config (Currency, Account, FTP) |
 | `analytics` | `03_Strategy_Lab/2026_allocation_plan/` | YieldSurface, FXAnalytics, FTPCalculator |
 | `allocation_engine` | `03_Strategy_Lab/2026_allocation_plan/` | NII optimization, multi-currency allocation |
+| `credit_bond_risk` | `03_Strategy_Lab/credit_bond_risk/` | Credit Intelligence Platform (LLM + Signal + RAG) |
+
+## 3.2 🎯 Credit Bond Risk Intelligence Platform
+A next-generation credit monitoring system combining traditional credit analysis with AI-native capabilities:
+
+| Component | Path | Design Pattern |
+|-----------|------|----------------|
+| `core/` | config, models, enums | Pydantic v2 Domain Models |
+| `signals/` | base, concentration, spread, rating, news | JPM Athena Signal Library |
+| `intelligence/` | embeddings, rag_engine, news_analyzer | LLM-Native RAG Architecture |
+| `ui/` | dashboard, components | Streamlit Multi-page App |
+
+**Key Design Philosophies:**
+- **BlackRock Aladdin**: Unified Risk View (Multi-source → Single Obligor View → Alert → Action)
+- **JPM Athena**: Signal Library (Standardized, Composable Signal Objects)
+- **LLM Native**: RAG + Summarization (News → Embedding → Retrieval → Summary)
+- **ML Ops**: Feature Store (Obligor Feature Vectors for Similarity & Anomaly Detection)
 
 ## 4. 🧠 Cognitive Frameworks (How to Think)
 When analyzing a problem, apply these filters:
@@ -108,8 +125,17 @@ Output a structured Markdown log summarizing the session:
 # Launch 2026 Allocation Dashboard
 cd 03_Strategy_Lab/2026_allocation_plan && streamlit run dashboard.py
 
+# Launch Credit Risk Intelligence Dashboard
+cd 03_Strategy_Lab/credit_bond_risk && streamlit run app.py
+
 # Initialize/Reset Database
 cd 01_Data_Warehouse/etl_scripts && python init_db.py
+
+# Initialize Credit Risk Database
+cd 03_Strategy_Lab/credit_bond_risk && python scripts/init_db.py
+
+# Sync News Data
+cd 03_Strategy_Lab/credit_bond_risk && python scripts/sync_news.py
 
 # Run Subportfolio Analysis
 cd 03_Strategy_Lab/2026_Investment_Plan && python analyze_subportfolios.py

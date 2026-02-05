@@ -666,6 +666,169 @@ def compute_carry_rolldown(
     return carry + rolldown
 
 
+# ============================================================================
+# 6. Carry/DV01 Efficiency Analyzer
+# ============================================================================
+@dataclass
+class EfficiencyMetrics:
+    """Container for carry efficiency metrics at a given tenor."""
+    tenor: float           # Years
+    yield_pct: float       # Yield in %
+    duration: float        # Modified duration (approx = tenor for zeros)
+    carry_bps: float       # Annual carry in bps (yield × 100)
+    dv01_per_mm: float     # DV01 per $1MM notional
+    efficiency: float      # Carry / DV01 ratio (bps per $ of DV01)
+    yield_per_dur: float   # Yield / Duration (% per year of duration)
+
+
+class CarryEfficiencyAnalyzer:
+    """
+    Analyze carry efficiency across the yield curve.
+
+    The key insight: In an inverted curve, short-end may offer better
+    "bang for buck" (carry per unit of duration risk).
+
+    Efficiency Metrics:
+    - Carry/DV01 = How many bps of carry per $ of rate sensitivity
+    - Yield/Duration = Yield earned per year of duration risk
+
+    For reinvestment decisions, higher efficiency = better risk-adjusted carry.
+    """
+
+    def __init__(self, yield_surface: YieldSurface) -> None:
+        self._surface = yield_surface
+
+    def calculate_efficiency_at_tenor(
+        self,
+        tenor: float,
+        forward_start: float = 0.0,
+    ) -> EfficiencyMetrics:
+        """
+        Calculate carry efficiency metrics at a specific tenor.
+
+        Args:
+            tenor: Bond tenor in years
+            forward_start: Forward start time (0 = spot)
+
+        Returns:
+            EfficiencyMetrics dataclass
+        """
+        # Get yield from surface
+        yield_decimal = self._surface.get_forward_rates(
+            np.array([forward_start]),
+            np.array([tenor])
+        )[0, 0]
+
+        yield_pct = yield_decimal * 100
+
+        # Duration approximation (modified duration ≈ tenor for zero-coupon)
+        # For coupon bonds, duration < tenor, but this is conservative
+        duration = tenor
+
+        # Carry in bps (annual)
+        carry_bps = yield_pct * 100  # e.g., 4.5% → 450 bps
+
+        # DV01 per $1MM notional = Duration × $1MM × 0.0001 = Duration × $100
+        dv01_per_mm = duration * 100  # in USD
+
+        # Efficiency = Carry (bps) / DV01 ($)
+        # Interpretation: bps of carry earned per $ of rate sensitivity
+        efficiency = carry_bps / dv01_per_mm if dv01_per_mm > 0 else 0.0
+
+        # Yield per Duration = Yield% / Duration
+        # Interpretation: % yield earned per year of duration risk
+        yield_per_dur = yield_pct / duration if duration > 0 else 0.0
+
+        return EfficiencyMetrics(
+            tenor=tenor,
+            yield_pct=yield_pct,
+            duration=duration,
+            carry_bps=carry_bps,
+            dv01_per_mm=dv01_per_mm,
+            efficiency=efficiency,
+            yield_per_dur=yield_per_dur,
+        )
+
+    def calculate_efficiency_curve(
+        self,
+        tenors: list[float] | None = None,
+        forward_start: float = 0.0,
+    ) -> list[EfficiencyMetrics]:
+        """
+        Calculate efficiency metrics across multiple tenors.
+
+        Args:
+            tenors: List of tenors to analyze (default: standard curve points)
+            forward_start: Forward start time
+
+        Returns:
+            List of EfficiencyMetrics for each tenor
+        """
+        if tenors is None:
+            tenors = [1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+
+        return [
+            self.calculate_efficiency_at_tenor(t, forward_start)
+            for t in tenors
+        ]
+
+    def find_optimal_tenor(
+        self,
+        tenors: list[float] | None = None,
+        min_tenor: float = 1.0,
+        max_tenor: float = 10.0,
+    ) -> EfficiencyMetrics:
+        """
+        Find the tenor with highest carry efficiency.
+
+        Args:
+            tenors: Tenors to search (default: 1-10Y annual)
+            min_tenor: Minimum acceptable tenor
+            max_tenor: Maximum acceptable tenor
+
+        Returns:
+            EfficiencyMetrics for optimal tenor
+        """
+        if tenors is None:
+            tenors = [float(t) for t in range(1, 11)]
+
+        # Filter by constraints
+        valid_tenors = [t for t in tenors if min_tenor <= t <= max_tenor]
+
+        if not valid_tenors:
+            valid_tenors = tenors
+
+        metrics = self.calculate_efficiency_curve(valid_tenors)
+
+        # Find max efficiency
+        return max(metrics, key=lambda m: m.efficiency)
+
+
+def create_multi_currency_efficiency_matrix(
+    surfaces: dict[str, YieldSurface],
+    tenors: list[float] | None = None,
+) -> dict[str, list[EfficiencyMetrics]]:
+    """
+    Create efficiency matrix across currencies and tenors.
+
+    Args:
+        surfaces: Dict of currency -> YieldSurface
+        tenors: Tenors to analyze
+
+    Returns:
+        Dict of currency -> list of EfficiencyMetrics
+    """
+    if tenors is None:
+        tenors = [1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+
+    result = {}
+    for ccy, surface in surfaces.items():
+        analyzer = CarryEfficiencyAnalyzer(surface)
+        result[ccy] = analyzer.calculate_efficiency_curve(tenors)
+
+    return result
+
+
 if __name__ == "__main__":
     # Quick test
     print("=== Analytics Module Test ===\n")

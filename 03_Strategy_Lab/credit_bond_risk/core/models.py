@@ -36,6 +36,7 @@ class Obligor(BaseModel):
     obligor_id: str = Field(..., description="唯一标识 (统一社会信用代码或内部ID)")
     name_cn: str = Field(..., description="中文名称")
     name_en: str | None = Field(None, description="英文名称")
+    ticker: str | None = Field(None, description="Bloomberg/Reuters Ticker")
 
     # 分类
     sector: Sector = Field(..., description="一级行业")

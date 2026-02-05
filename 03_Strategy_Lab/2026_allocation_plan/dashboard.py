@@ -27,7 +27,13 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 # Local imports (use absolute imports for Streamlit compatibility)
-from analytics import NelsonSiegelSvensson, YieldSurface
+from analytics import (
+    NelsonSiegelSvensson,
+    YieldSurface,
+    CarryEfficiencyAnalyzer,
+    EfficiencyMetrics,
+    create_multi_currency_efficiency_matrix,
+)
 from config import (
     Currency,
     SimulationParams,
@@ -751,6 +757,176 @@ def create_enhanced_yield_impact_analysis(
             })
 
     return pd.DataFrame(summary_records), pd.DataFrame(records)
+
+
+# ============================================================================
+# 3.5 Carry/DV01 Efficiency Matrix Functions
+# ============================================================================
+def create_efficiency_heatmap(
+    efficiency_data: dict[str, list[EfficiencyMetrics]],
+    metric: str = "yield_per_dur",
+    title: str = "Yield/Duration Efficiency Matrix",
+) -> go.Figure:
+    """
+    Create heatmap visualization of carry efficiency across currencies and tenors.
+
+    Args:
+        efficiency_data: Dict of currency -> list of EfficiencyMetrics
+        metric: Which metric to display ('yield_per_dur', 'efficiency', 'carry_bps')
+        title: Chart title
+
+    Returns:
+        Plotly Figure
+    """
+    currencies = list(efficiency_data.keys())
+    if not currencies:
+        return go.Figure()
+
+    tenors = [m.tenor for m in efficiency_data[currencies[0]]]
+    tenor_labels = [f"{int(t)}Y" if t >= 1 else f"{int(t*12)}M" for t in tenors]
+
+    # Build matrix
+    z_values = []
+    for ccy in currencies:
+        row = []
+        for m in efficiency_data[ccy]:
+            if metric == "yield_per_dur":
+                row.append(m.yield_per_dur)
+            elif metric == "efficiency":
+                row.append(m.efficiency)
+            elif metric == "carry_bps":
+                row.append(m.carry_bps)
+            else:
+                row.append(m.yield_pct)
+        z_values.append(row)
+
+    # Color scale based on metric
+    if metric == "yield_per_dur":
+        colorscale = "RdYlGn"
+        colorbar_title = "Yield/Dur (%/Y)"
+        fmt = ".2f"
+    elif metric == "efficiency":
+        colorscale = "Viridis"
+        colorbar_title = "bps per $DV01"
+        fmt = ".1f"
+    else:
+        colorscale = "Blues"
+        colorbar_title = "bps"
+        fmt = ".0f"
+
+    # Find optimal points (max per currency)
+    annotations = []
+    for i, ccy in enumerate(currencies):
+        max_idx = np.argmax([z_values[i][j] for j in range(len(tenors))])
+        annotations.append(dict(
+            x=tenor_labels[max_idx],
+            y=ccy,
+            text="★",
+            showarrow=False,
+            font=dict(size=16, color="white"),
+        ))
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z_values,
+        x=tenor_labels,
+        y=currencies,
+        colorscale=colorscale,
+        colorbar=dict(title=colorbar_title),
+        hovertemplate=(
+            "Currency: %{y}<br>"
+            "Tenor: %{x}<br>"
+            f"Value: %{{z:{fmt}}}<br>"
+            "<extra></extra>"
+        ),
+        text=[[f"{v:.2f}" for v in row] for row in z_values],
+        texttemplate="%{text}",
+        textfont=dict(size=11, color="white"),
+    ))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=16)),
+        xaxis=dict(title="Tenor", side="bottom"),
+        yaxis=dict(title="Currency", autorange="reversed"),
+        height=300,
+        margin=dict(l=60, r=20, t=50, b=40),
+        annotations=annotations,
+    )
+
+    return fig
+
+
+def create_efficiency_table(
+    efficiency_data: dict[str, list[EfficiencyMetrics]],
+) -> pd.DataFrame:
+    """
+    Create detailed efficiency table.
+
+    Args:
+        efficiency_data: Dict of currency -> list of EfficiencyMetrics
+
+    Returns:
+        DataFrame with efficiency breakdown
+    """
+    records = []
+    for ccy, metrics_list in efficiency_data.items():
+        for m in metrics_list:
+            records.append({
+                "币种": ccy,
+                "期限": f"{int(m.tenor)}Y" if m.tenor >= 1 else f"{int(m.tenor*12)}M",
+                "收益率(%)": f"{m.yield_pct:.2f}",
+                "久期": f"{m.duration:.1f}",
+                "年化Carry(bp)": f"{m.carry_bps:.0f}",
+                "DV01($/MM)": f"{m.dv01_per_mm:.0f}",
+                "效率(bp/$)": f"{m.efficiency:.2f}",
+                "Yield/Dur": f"{m.yield_per_dur:.2f}",
+            })
+    return pd.DataFrame(records)
+
+
+def get_efficiency_from_forward_data(
+    currencies: list[str],
+    tenors: list[float],
+) -> dict[str, list[EfficiencyMetrics]]:
+    """
+    Get efficiency metrics using real forward rate data.
+
+    Args:
+        currencies: List of currency codes
+        tenors: List of tenors to analyze
+
+    Returns:
+        Dict of currency -> list of EfficiencyMetrics
+    """
+    result = {}
+
+    for ccy in currencies:
+        metrics_list = []
+        for tenor in tenors:
+            # Get yield from forward rate data
+            rate = get_interpolated_rate(ccy, tenor, 0.0, method="cubic")
+            if rate is None:
+                rate = 4.0  # Fallback
+
+            yield_pct = rate
+            duration = tenor
+            carry_bps = yield_pct * 100
+            dv01_per_mm = duration * 100
+            efficiency = carry_bps / dv01_per_mm if dv01_per_mm > 0 else 0.0
+            yield_per_dur = yield_pct / duration if duration > 0 else 0.0
+
+            metrics_list.append(EfficiencyMetrics(
+                tenor=tenor,
+                yield_pct=yield_pct,
+                duration=duration,
+                carry_bps=carry_bps,
+                dv01_per_mm=dv01_per_mm,
+                efficiency=efficiency,
+                yield_per_dur=yield_per_dur,
+            ))
+
+        result[ccy] = metrics_list
+
+    return result
 
 
 # ============================================================================
@@ -1713,6 +1889,100 @@ def render_main_content(settings: dict[str, Any]) -> None:
                     st.dataframe(pd.DataFrame(fwd_rates_data), use_container_width=True, hide_index=True)
                 else:
                     st.info("Forward rate data not available.")
+
+        # =====================================================================
+        # STEP 3.5: Yield/Duration Efficiency Matrix (Maturity Cliff Monetization)
+        # =====================================================================
+        st.markdown("---")
+        st.subheader("⚡ Step 3.5: Yield/Duration Efficiency (Carry per DV01)")
+
+        st.markdown("""
+        > **Maturity Cliff Monetization**: 在inverted curve环境下，短端可能提供更高的**风险调整后收益**。
+        >
+        > 核心指标: $$\\text{Efficiency} = \\frac{\\text{Yield}}{\\text{Duration}} = \\frac{\\text{Carry (bps)}}{\\text{DV01 (\\$/MM)}}$$
+        >
+        > ★ = 该币种最优期限点
+        """)
+
+        # Get efficiency data
+        efficiency_currencies = ["USD", "EUR", "AUD", "CNH"]
+        efficiency_tenors = [1.0, 2.0, 3.0, 5.0, 7.0, 10.0]
+
+        efficiency_data = get_efficiency_from_forward_data(
+            efficiency_currencies,
+            efficiency_tenors,
+        )
+
+        # Display heatmap
+        col_hm1, col_hm2 = st.columns([2, 1])
+
+        with col_hm1:
+            fig_eff = create_efficiency_heatmap(
+                efficiency_data,
+                metric="yield_per_dur",
+                title="Yield/Duration Efficiency Matrix (% per Year of Duration)"
+            )
+            st.plotly_chart(fig_eff, use_container_width=True)
+
+        with col_hm2:
+            # Key insights
+            st.markdown("**关键发现**")
+
+            # Find best tenor per currency
+            best_tenors = []
+            for ccy, metrics in efficiency_data.items():
+                best = max(metrics, key=lambda m: m.yield_per_dur)
+                best_tenors.append({
+                    "币种": ccy,
+                    "最优期限": f"{int(best.tenor)}Y",
+                    "Yield/Dur": f"{best.yield_per_dur:.2f}%/Y",
+                    "收益率": f"{best.yield_pct:.2f}%",
+                })
+
+            st.dataframe(
+                pd.DataFrame(best_tenors),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # Interpretation
+            st.markdown("""
+            **解读**:
+            - Yield/Dur **越高** = 每单位久期获取的carry越多
+            - Inverted curve → 短端效率更高
+            - Steep curve → 长端效率可能更优
+            """)
+
+        # Detailed efficiency table (collapsible)
+        with st.expander("📊 详细效率数据表", expanded=False):
+            eff_df = create_efficiency_table(efficiency_data)
+            st.dataframe(eff_df, use_container_width=True, hide_index=True)
+
+            st.markdown("""
+            **列说明**:
+            - **Carry(bp)**: 年化carry = Yield × 100
+            - **DV01($/MM)**: 每$1MM本金的利率敏感度 = Duration × $100
+            - **效率(bp/$)**: 每$1 DV01获得的carry (bps)
+            - **Yield/Dur**: 每年久期获得的收益率 (%)
+            """)
+
+        # Reinvestment recommendation
+        st.markdown("**📌 Reinvestment建议**")
+
+        rec_cols = st.columns(4)
+        for i, ccy in enumerate(efficiency_currencies):
+            metrics = efficiency_data[ccy]
+            best = max(metrics, key=lambda m: m.yield_per_dur)
+            worst = min(metrics, key=lambda m: m.yield_per_dur)
+
+            with rec_cols[i]:
+                delta = best.yield_per_dur - worst.yield_per_dur
+                st.metric(
+                    f"{ccy} 最优",
+                    f"{int(best.tenor)}Y",
+                    delta=f"+{delta:.2f}%/Y vs {int(worst.tenor)}Y",
+                    help=f"Yield={best.yield_pct:.2f}%, Dur={best.duration:.1f}Y"
+                )
 
         # =====================================================================
         # STEP 4: 投资计划汇总

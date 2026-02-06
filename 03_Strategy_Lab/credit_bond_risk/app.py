@@ -1342,7 +1342,7 @@ def _create_issuer_oas_history(obligor_id: str, base_oas: float) -> go.Figure:
     ))
     fig.add_trace(go.Scatter(
         x=dates, y=lower, mode='lines', line=dict(width=0), showlegend=False,
-        fill='tonexty', fillcolor=f'{theme.accent_blue}10', hoverinfo='skip',
+        fill='tonexty', fillcolor='rgba(91,141,239,0.06)', hoverinfo='skip',
     ))
 
     # OAS line
@@ -1498,7 +1498,7 @@ def _create_sentiment_timeline(news_items: list[NewsItem]) -> go.Figure:
     fig.add_trace(go.Scatter(
         x=times, y=scores, mode='lines',
         line=dict(color=theme.accent_blue, width=1.5),
-        fill='tozeroy', fillcolor=f'{theme.accent_blue}15',
+        fill='tozeroy', fillcolor='rgba(91,141,239,0.08)',
         hoverinfo='skip', showlegend=False,
     ))
 
@@ -1778,7 +1778,7 @@ def render_issuer_page():
             fig_radar.add_trace(go.Scatterpolar(
                 r=values_closed, theta=categories_closed,
                 fill='toself',
-                fillcolor=f'{theme.accent_blue}20',
+                fillcolor='rgba(91,141,239,0.12)',
                 line=dict(color=theme.accent_blue, width=2),
                 marker=dict(size=6, color=theme.accent_blue),
                 name='Risk Profile',

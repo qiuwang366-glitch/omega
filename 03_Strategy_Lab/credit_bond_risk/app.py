@@ -1108,19 +1108,429 @@ def render_panorama_page():
     st.plotly_chart(create_dv01_decomposition_chart(exposures), use_container_width=True, config={'displayModeBar': False})
 
 
+def _compute_issuer_risk_scores(obligor: Obligor, exp: "CreditExposure", alerts: list[RiskAlert], news_items: list[NewsItem], exposures: list["CreditExposure"]) -> dict:
+    """Compute composite risk scores for an issuer (Aladdin-style)."""
+    selected_id = obligor.obligor_id
+
+    # 1. Credit Quality Score (based on rating + outlook)
+    rating_base = RATING_SCORE.get(obligor.rating_internal, 50)
+    outlook_adj = {"POSITIVE": 3, "STABLE": 0, "NEGATIVE": -8, "WATCH_NEG": -15}.get(obligor.rating_outlook.value, 0)
+    credit_score = max(0, min(100, rating_base + outlook_adj))
+
+    # 2. Concentration Score (inverse - lower concentration = higher score)
+    pct = exp.pct_of_aum
+    if pct < 0.01:
+        conc_score = 95
+    elif pct < 0.02:
+        conc_score = 85
+    elif pct < 0.03:
+        conc_score = 70
+    elif pct < 0.05:
+        conc_score = 50
+    else:
+        conc_score = max(10, 100 - pct * 1000)
+
+    # 3. Spread Score (tighter spread = higher score)
+    oas = exp.weighted_avg_oas
+    if oas < 50:
+        spread_score = 95
+    elif oas < 100:
+        spread_score = 85
+    elif oas < 200:
+        spread_score = 70
+    elif oas < 400:
+        spread_score = 50
+    else:
+        spread_score = max(10, 100 - oas / 10)
+
+    # 4. News Sentiment Score
+    issuer_news = [n for n in news_items if selected_id in n.obligor_ids]
+    if issuer_news:
+        avg_sentiment = np.mean([n.sentiment_score for n in issuer_news if n.sentiment_score is not None] or [0])
+        news_score = max(0, min(100, 50 + avg_sentiment * 50))
+    else:
+        news_score = 60  # neutral default
+
+    # 5. Alert Score (fewer/less severe alerts = higher score)
+    issuer_alerts = [a for a in alerts if a.obligor_id == selected_id]
+    critical_count = sum(1 for a in issuer_alerts if a.severity == Severity.CRITICAL)
+    warning_count = sum(1 for a in issuer_alerts if a.severity == Severity.WARNING)
+    alert_score = max(0, 100 - critical_count * 25 - warning_count * 10)
+
+    # 6. Liquidity / Market Score (based on number of bonds and total size)
+    n_bonds = len(exp.bonds)
+    total_mv = exp.total_market_usd
+    if total_mv > 500e6 and n_bonds >= 4:
+        liquidity_score = 90
+    elif total_mv > 200e6 and n_bonds >= 3:
+        liquidity_score = 75
+    elif total_mv > 50e6:
+        liquidity_score = 60
+    else:
+        liquidity_score = 40
+
+    # Composite (weighted)
+    weights = {"credit": 0.30, "spread": 0.20, "concentration": 0.10, "news": 0.15, "alerts": 0.15, "liquidity": 0.10}
+    composite = (
+        credit_score * weights["credit"]
+        + spread_score * weights["spread"]
+        + conc_score * weights["concentration"]
+        + news_score * weights["news"]
+        + alert_score * weights["alerts"]
+        + liquidity_score * weights["liquidity"]
+    )
+
+    return {
+        "composite": round(composite, 1),
+        "credit": round(credit_score, 1),
+        "spread": round(spread_score, 1),
+        "concentration": round(conc_score, 1),
+        "news": round(news_score, 1),
+        "alerts": round(alert_score, 1),
+        "liquidity": round(liquidity_score, 1),
+    }
+
+
+def _render_risk_gauge_svg(score: float, size: int = 140) -> str:
+    """Render a circular risk gauge as inline SVG."""
+    theme = NordicTheme()
+    # Determine color based on score
+    if score >= 80:
+        color = theme.accent_green
+        label = "LOW RISK"
+    elif score >= 60:
+        color = theme.accent_blue
+        label = "MODERATE"
+    elif score >= 40:
+        color = theme.accent_amber
+        label = "ELEVATED"
+    else:
+        color = theme.severity_critical
+        label = "HIGH RISK"
+
+    cx, cy = size // 2, size // 2
+    r = size // 2 - 12
+    circumference = 2 * 3.14159 * r
+    pct = score / 100
+    dash = circumference * pct
+    gap = circumference - dash
+
+    return f"""
+    <div style="text-align:center;">
+        <svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">
+            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{theme.bg_tertiary}" stroke-width="10"/>
+            <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{color}" stroke-width="10"
+                    stroke-dasharray="{dash:.1f} {gap:.1f}"
+                    stroke-linecap="round" transform="rotate(-90 {cx} {cy})"
+                    style="transition: stroke-dasharray 0.8s ease;"/>
+            <text x="{cx}" y="{cy - 6}" text-anchor="middle" font-size="28" font-weight="700" fill="{theme.text_primary}" font-family="Inter, sans-serif">{score:.0f}</text>
+            <text x="{cx}" y="{cy + 16}" text-anchor="middle" font-size="10" font-weight="600" fill="{color}" font-family="Inter, sans-serif" letter-spacing="0.08em">{label}</text>
+        </svg>
+    </div>"""
+
+
+def _create_issuer_yield_curve(bonds: list[BondPosition]) -> go.Figure:
+    """Create issuer's bond yield curve (tenor vs OAS/coupon)."""
+    theme = NordicTheme()
+    if not bonds:
+        return go.Figure()
+
+    sorted_bonds = sorted(bonds, key=lambda b: b.years_to_maturity)
+    tenors = [b.years_to_maturity for b in sorted_bonds]
+    oas_vals = [b.oas for b in sorted_bonds if b.oas]
+    coupon_vals = [b.coupon for b in sorted_bonds]
+    sizes = [max(8, min(30, b.nominal_usd / 1e6 / 10)) for b in sorted_bonds]
+    hover_texts = [
+        f"<b>{b.isin}</b><br>到期: {b.maturity_date.strftime('%Y-%m-%d')}<br>"
+        f"票息: {b.coupon:.2f}%<br>OAS: {b.oas:.0f}bp<br>"
+        f"面值: ${b.nominal_usd/1e6:.0f}M<br>久期: {b.duration:.2f}"
+        for b in sorted_bonds
+    ]
+
+    fig = go.Figure()
+
+    # OAS scatter (bubble size = nominal)
+    if oas_vals and len(oas_vals) == len(sorted_bonds):
+        fig.add_trace(go.Scatter(
+            x=tenors, y=oas_vals, mode='markers+lines',
+            name='OAS (bp)',
+            marker=dict(size=sizes, color=theme.accent_blue, opacity=0.8,
+                        line=dict(width=1.5, color='white')),
+            line=dict(color=theme.accent_blue, width=1.5, dash='dot'),
+            text=hover_texts, hovertemplate="%{text}<extra></extra>",
+        ))
+
+    # Coupon scatter on secondary y-axis
+    fig.add_trace(go.Scatter(
+        x=tenors, y=coupon_vals, mode='markers',
+        name='Coupon (%)',
+        marker=dict(size=8, color=theme.accent_amber, symbol='diamond',
+                    line=dict(width=1, color='white')),
+        yaxis='y2',
+        hovertemplate="期限: %{x:.1f}Y<br>票息: %{y:.2f}%<extra></extra>",
+    ))
+
+    # Fitted curve (simple interpolation for visual)
+    if len(tenors) >= 3 and oas_vals and len(oas_vals) == len(sorted_bonds):
+        t_smooth = np.linspace(min(tenors), max(tenors), 50)
+        try:
+            from scipy.interpolate import UnivariateSpline
+            spline = UnivariateSpline(tenors, oas_vals, s=len(tenors) * 100, k=min(3, len(tenors) - 1))
+            oas_smooth = spline(t_smooth)
+            fig.add_trace(go.Scatter(
+                x=t_smooth, y=oas_smooth, mode='lines',
+                name='拟合曲线', line=dict(color=theme.accent_blue, width=2),
+                hoverinfo='skip', opacity=0.4,
+            ))
+        except Exception:
+            pass
+
+    layout = get_nordic_layout("发行人收益率曲线 | Issuer Yield Curve", height=340)
+    layout['xaxis']['title'] = dict(text="期限 (Years)", font=dict(size=11, color=theme.text_muted))
+    layout['yaxis']['title'] = dict(text="OAS (bp)", font=dict(size=11, color=theme.accent_blue))
+    layout['yaxis2'] = dict(
+        title=dict(text="Coupon (%)", font=dict(size=11, color=theme.accent_amber)),
+        overlaying='y', side='right', showgrid=False,
+        tickfont=dict(color=theme.accent_amber, size=10),
+    )
+    layout['legend'] = dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, font=dict(size=10))
+    fig.update_layout(**layout)
+    return fig
+
+
+def _create_issuer_oas_history(obligor_id: str, base_oas: float) -> go.Figure:
+    """Create OAS history trend chart for an issuer."""
+    theme = NordicTheme()
+    np.random.seed(hash(obligor_id) % (2**31))
+
+    # Generate 252 trading days of history
+    days = 252
+    dates = []
+    oas_series = []
+    oas = base_oas
+    current = date.today()
+
+    for i in range(days, 0, -1):
+        d = current - timedelta(days=i)
+        if d.weekday() < 5:
+            change = np.random.normal(0, base_oas * 0.015)
+            reversion = (base_oas - oas) * 0.03
+            oas = max(10, oas + change + reversion)
+            dates.append(d)
+            oas_series.append(round(oas, 1))
+
+    oas_arr = np.array(oas_series)
+    mean_oas = float(np.mean(oas_arr))
+    std_oas = float(np.std(oas_arr))
+    current_oas = oas_series[-1] if oas_series else base_oas
+    pctile = float(np.sum(oas_arr <= current_oas) / len(oas_arr) * 100) if oas_arr.size > 0 else 50
+
+    # Moving averages
+    ma_20 = pd.Series(oas_series).rolling(20).mean().tolist()
+    ma_60 = pd.Series(oas_series).rolling(60).mean().tolist()
+
+    fig = go.Figure()
+
+    # Bollinger bands (mean +/- 2 std rolling)
+    rolling_mean = pd.Series(oas_series).rolling(60).mean()
+    rolling_std = pd.Series(oas_series).rolling(60).std()
+    upper = (rolling_mean + 2 * rolling_std).tolist()
+    lower = (rolling_mean - 2 * rolling_std).tolist()
+
+    fig.add_trace(go.Scatter(
+        x=dates, y=upper, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip',
+    ))
+    fig.add_trace(go.Scatter(
+        x=dates, y=lower, mode='lines', line=dict(width=0), showlegend=False,
+        fill='tonexty', fillcolor=f'{theme.accent_blue}10', hoverinfo='skip',
+    ))
+
+    # OAS line
+    fig.add_trace(go.Scatter(
+        x=dates, y=oas_series, mode='lines', name='OAS',
+        line=dict(color=theme.accent_blue, width=2),
+        hovertemplate="日期: %{x}<br>OAS: %{y:.0f}bp<extra></extra>",
+    ))
+
+    # Moving averages
+    fig.add_trace(go.Scatter(
+        x=dates, y=ma_20, mode='lines', name='MA20',
+        line=dict(color=theme.accent_amber, width=1, dash='dot'),
+    ))
+    fig.add_trace(go.Scatter(
+        x=dates, y=ma_60, mode='lines', name='MA60',
+        line=dict(color=theme.accent_coral, width=1, dash='dash'),
+    ))
+
+    # Annotations
+    fig.add_annotation(
+        x=dates[-1], y=current_oas, text=f"  {current_oas:.0f}bp",
+        showarrow=False, font=dict(size=12, color=theme.accent_blue, weight="bold"),
+        xanchor='left',
+    )
+
+    layout = get_nordic_layout(f"利差走势 | OAS History  (当前 {current_oas:.0f}bp · {pctile:.0f}th %ile · μ={mean_oas:.0f} σ={std_oas:.0f})", height=320)
+    layout['legend'] = dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, font=dict(size=10))
+    fig.update_layout(**layout)
+    return fig
+
+
+def _create_issuer_maturity_wall(bonds: list[BondPosition]) -> go.Figure:
+    """Create maturity wall chart for an issuer's bonds."""
+    theme = NordicTheme()
+    if not bonds:
+        return go.Figure()
+
+    # Group by year
+    year_buckets: dict[int, float] = {}
+    for bond in bonds:
+        yr = bond.maturity_date.year
+        year_buckets[yr] = year_buckets.get(yr, 0) + bond.nominal_usd
+
+    years = sorted(year_buckets.keys())
+    values = [year_buckets[y] / 1e6 for y in years]
+
+    # Color: near-term = warm, far-term = cool
+    colors = []
+    for y in years:
+        diff = y - date.today().year
+        if diff <= 1:
+            colors.append(theme.accent_coral)
+        elif diff <= 2:
+            colors.append(theme.accent_amber)
+        elif diff <= 5:
+            colors.append(theme.accent_blue)
+        else:
+            colors.append(theme.accent_green)
+
+    fig = go.Figure(data=[go.Bar(
+        x=[str(y) for y in years], y=values,
+        marker_color=colors,
+        text=[f"${v:.0f}M" for v in values],
+        textposition="outside",
+        textfont=dict(size=10, color=theme.text_secondary),
+        hovertemplate="年份: %{x}<br>到期面值: $%{y:.0f}M<extra></extra>",
+    )])
+    layout = get_nordic_layout("到期墙 | Maturity Wall", height=280)
+    layout['bargap'] = 0.35
+    fig.update_layout(**layout)
+    return fig
+
+
+def _create_peer_comparison_chart(obligor: Obligor, exp: "CreditExposure", exposures: list["CreditExposure"]) -> go.Figure:
+    """Create peer comparison chart (OAS vs peers in same sector/rating bucket)."""
+    theme = NordicTheme()
+
+    # Find peers: same sector or adjacent rating
+    peers = []
+    for e in exposures:
+        if e.obligor.obligor_id == obligor.obligor_id:
+            continue
+        if e.total_market_usd <= 0:
+            continue
+        same_sector = e.obligor.sector == obligor.sector
+        rating_diff = abs(RATING_SCORE.get(e.obligor.rating_internal, 50) - RATING_SCORE.get(obligor.rating_internal, 50))
+        same_rating_bucket = rating_diff <= 15
+        if same_sector or same_rating_bucket:
+            peers.append(e)
+
+    # Sort by OAS, take top 10
+    peers = sorted(peers, key=lambda e: e.weighted_avg_oas, reverse=True)[:10]
+
+    # Add the target obligor
+    all_issuers = peers + [exp]
+    all_issuers = sorted(all_issuers, key=lambda e: e.weighted_avg_oas, reverse=True)
+
+    names = []
+    oas_vals = []
+    colors = []
+    for e in all_issuers:
+        label = e.obligor.name_cn[:8]
+        names.append(label)
+        oas_vals.append(e.weighted_avg_oas)
+        if e.obligor.obligor_id == obligor.obligor_id:
+            colors.append(theme.accent_blue)
+        else:
+            colors.append(theme.bg_tertiary)
+
+    fig = go.Figure(data=[go.Bar(
+        y=names, x=oas_vals, orientation='h',
+        marker_color=colors,
+        marker_line=dict(width=[2 if c == theme.accent_blue else 0 for c in colors], color=theme.accent_blue),
+        text=[f"{v:.0f}bp" for v in oas_vals],
+        textposition='outside',
+        textfont=dict(size=10, color=theme.text_secondary),
+        hovertemplate="<b>%{y}</b><br>OAS: %{x:.0f}bp<extra></extra>",
+    )])
+    layout = get_nordic_layout("同业比较 | Peer Comparison (OAS)", height=max(250, len(all_issuers) * 28))
+    layout['bargap'] = 0.3
+    fig.update_layout(**layout)
+    fig.update_yaxes(autorange="reversed")
+    return fig
+
+
+def _create_sentiment_timeline(news_items: list[NewsItem]) -> go.Figure:
+    """Create sentiment timeline for issuer-related news."""
+    theme = NordicTheme()
+    if not news_items:
+        return go.Figure()
+
+    sorted_news = sorted(news_items, key=lambda n: n.timestamp)
+    times = [n.timestamp for n in sorted_news]
+    scores = [n.sentiment_score if n.sentiment_score is not None else 0 for n in sorted_news]
+    colors = []
+    for s in scores:
+        if s > 0.2:
+            colors.append(theme.accent_green)
+        elif s < -0.2:
+            colors.append(theme.accent_coral)
+        else:
+            colors.append(theme.text_muted)
+
+    hover_texts = [f"<b>{n.title[:30]}...</b><br>来源: {n.source}<br>情感: {n.sentiment_score or 0:.2f}" for n in sorted_news]
+
+    fig = go.Figure()
+
+    # Zero line
+    fig.add_hline(y=0, line_dash="dash", line_color=theme.border_light, line_width=1)
+
+    # Area fill
+    fig.add_trace(go.Scatter(
+        x=times, y=scores, mode='lines',
+        line=dict(color=theme.accent_blue, width=1.5),
+        fill='tozeroy', fillcolor=f'{theme.accent_blue}15',
+        hoverinfo='skip', showlegend=False,
+    ))
+
+    # Dots
+    fig.add_trace(go.Scatter(
+        x=times, y=scores, mode='markers',
+        marker=dict(size=10, color=colors, line=dict(width=1.5, color='white')),
+        text=hover_texts, hovertemplate="%{text}<extra></extra>",
+        name='新闻情感',
+    ))
+
+    layout = get_nordic_layout("新闻情感走势 | Sentiment Timeline", height=240)
+    layout['yaxis']['range'] = [-1.1, 1.1]
+    layout['yaxis']['title'] = dict(text="Sentiment", font=dict(size=10, color=theme.text_muted))
+    layout['showlegend'] = False
+    fig.update_layout(**layout)
+    return fig
+
+
 def render_issuer_page():
-    """发行人分析页面"""
+    """发行人深度分析页面 | Issuer Deep-Dive (Aladdin-inspired)"""
     theme = NordicTheme()
     exposures = st.session_state.exposures
     obligors = st.session_state.obligors
     alerts = st.session_state.alerts
     news_items = st.session_state.news
 
-    # Issuer selector
+    # ── Issuer Selector ──────────────────────────────────────────────
     sorted_exposures = sorted(exposures, key=lambda x: x.total_market_usd, reverse=True)
-    issuer_options = {e.obligor.obligor_id: f"{e.obligor.name_cn} (${e.total_market_usd/1e6:.0f}M)" for e in sorted_exposures if e.total_market_usd > 0}
+    issuer_options = {e.obligor.obligor_id: f"{e.obligor.name_cn} ({e.obligor.rating_internal.value}) · ${e.total_market_usd/1e6:.0f}M" for e in sorted_exposures if e.total_market_usd > 0}
 
-    selected_id = st.selectbox("选择发行人", options=list(issuer_options.keys()), format_func=lambda x: issuer_options[x])
+    selected_id = st.selectbox("选择发行人 | Select Issuer", options=list(issuer_options.keys()), format_func=lambda x: issuer_options[x])
 
     if not selected_id:
         return
@@ -1131,124 +1541,483 @@ def render_issuer_page():
 
     obligor = exp.obligor
     rating_color = NordicTheme.get_rating_color(obligor.rating_internal.value)
-    outlook_icon = {"POSITIVE": "↑", "STABLE": "→", "NEGATIVE": "↓", "WATCH_NEG": "⚠"}.get(obligor.rating_outlook.value, "")
+    sector_color = NordicTheme.get_sector_color(obligor.sector.value)
+    outlook_map = {"POSITIVE": ("↑", theme.accent_green), "STABLE": ("→", theme.text_muted), "NEGATIVE": ("↓", theme.accent_coral), "WATCH_NEG": ("⚠", theme.severity_critical)}
+    outlook_icon, outlook_color = outlook_map.get(obligor.rating_outlook.value, ("", theme.text_muted))
+    issuer_alerts = [a for a in alerts if a.obligor_id == selected_id]
+    issuer_news = [n for n in news_items if selected_id in n.obligor_ids]
+    risk_scores = _compute_issuer_risk_scores(obligor, exp, alerts, news_items, exposures)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-    # Header Card
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        sector_color = NordicTheme.get_sector_color(obligor.sector.value)
+    # ══════════════════════════════════════════════════════════════════
+    # SECTION 1: Header Card + Risk Gauge
+    # ══════════════════════════════════════════════════════════════════
+    col_header, col_gauge, col_exposure = st.columns([5, 2, 3])
+
+    with col_header:
+        # Sector tag
+        sector_map = {"LGFV": "城投", "SOE": "央企", "FINANCIAL": "金融", "G-SIB": "G-SIB", "US_CORP": "美企", "EU_CORP": "欧企", "EM_SOVEREIGN": "新兴主权", "SUPRA": "超主权", "HY": "高收益", "CORP": "企业"}
+        sector_label = sector_map.get(obligor.sector.value, obligor.sector.value)
+        region_map = {"CHINA_OFFSHORE": "中国离岸", "CHINA_ONSHORE": "中国在岸", "US": "美国", "EU": "欧洲", "UK": "英国", "JAPAN": "日本", "LATAM": "拉美", "CEEMEA": "中东欧", "ASIA_EX_CHINA": "亚太", "SUPRANATIONAL": "超主权"}
+        region_label = region_map.get(obligor.region.value, obligor.region.value)
+
+        # External ratings (simulated for demo)
+        ext_ratings_html = ""
+        rating_val = obligor.rating_internal.value
+        ext_map = {
+            "AAA": ("Aaa", "AAA", "AAA"), "AA+": ("Aa1", "AA+", "AA+"), "AA": ("Aa2", "AA", "AA"),
+            "AA-": ("Aa3", "AA-", "AA-"), "A+": ("A1", "A+", "A+"), "A": ("A2", "A", "A"),
+            "A-": ("A3", "A-", "A-"), "BBB+": ("Baa1", "BBB+", "BBB+"), "BBB": ("Baa2", "BBB", "BBB"),
+            "BBB-": ("Baa3", "BBB-", "BBB-"), "BB+": ("Ba1", "BB+", "BB+"), "BB": ("Ba2", "BB", "BB"),
+            "BB-": ("Ba3", "BB-", "BB-"), "B+": ("B1", "B+", "B+"), "B": ("B2", "B", "B"),
+            "B-": ("B3", "B-", "B-"), "CCC": ("Caa1", "CCC+", "CCC"),
+        }
+        ext = ext_map.get(rating_val, (rating_val, rating_val, rating_val))
+        ext_ratings_html = f"""
+        <div style="display:flex;gap:8px;margin-top:12px;">
+            <span style="background:{theme.bg_tertiary};padding:3px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">Moody's: {ext[0]}</span>
+            <span style="background:{theme.bg_tertiary};padding:3px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">S&P: {ext[1]}</span>
+            <span style="background:{theme.bg_tertiary};padding:3px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">Fitch: {ext[2]}</span>
+        </div>"""
+
+        alert_badges = ""
+        crit_count = sum(1 for a in issuer_alerts if a.severity == Severity.CRITICAL)
+        warn_count = sum(1 for a in issuer_alerts if a.severity == Severity.WARNING)
+        if crit_count:
+            alert_badges += f'<span style="background:{theme.severity_critical};color:white;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:8px;">{crit_count} CRITICAL</span>'
+        if warn_count:
+            alert_badges += f'<span style="background:{theme.severity_warning};color:white;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;margin-left:4px;">{warn_count} WARNING</span>'
+
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:28px;border-left:4px solid {sector_color};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:24px 28px;border-left:4px solid {sector_color};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <div>
-                    <h2 style="color:{theme.text_primary};margin:0;font-weight:600;font-size:20px;letter-spacing:-0.01em;">{obligor.name_cn}</h2>
-                    <p style="color:{theme.text_muted};margin:6px 0 0 0;font-size:13px;">{obligor.name_en or ''}</p>
+                <div style="flex:1;">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <h2 style="color:{theme.text_primary};margin:0;font-weight:600;font-size:22px;letter-spacing:-0.01em;">{obligor.name_cn}</h2>
+                        {alert_badges}
+                    </div>
+                    <p style="color:{theme.text_muted};margin:4px 0 0 0;font-size:13px;">{obligor.name_en or ''}{(' · ' + obligor.ticker) if obligor.ticker else ''}</p>
+                    {ext_ratings_html}
                 </div>
-                <div style="text-align:right;">
-                    <span style="background:{rating_color};color:white;padding:10px 18px;border-radius:10px;font-weight:700;font-size:18px;letter-spacing:0.02em;box-shadow:0 2px 4px {rating_color}40;">{obligor.rating_internal.value}</span>
-                    <p style="color:{theme.text_muted};margin:10px 0 0 0;font-size:12px;">{outlook_icon} {obligor.rating_outlook.value}</p>
+                <div style="text-align:center;margin-left:20px;">
+                    <span style="background:linear-gradient(135deg, {rating_color}, {rating_color}CC);color:white;padding:12px 20px;border-radius:12px;font-weight:700;font-size:22px;letter-spacing:0.02em;box-shadow:0 3px 8px {rating_color}40;display:inline-block;">{obligor.rating_internal.value}</span>
+                    <p style="color:{outlook_color};margin:8px 0 0 0;font-size:12px;font-weight:600;">{outlook_icon} {obligor.rating_outlook.value}</p>
                 </div>
             </div>
-            <div style="margin-top:24px;display:flex;gap:36px;flex-wrap:wrap;padding-top:16px;border-top:1px solid {theme.bg_tertiary};">
-                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">行业</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.sector.value}</span></div>
-                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">区域</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.region.value.replace('_', ' ')}</span></div>
-                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">国家</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.country or 'N/A'}</span></div>
-                {f'<div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">代码</span><br><span style="color:{theme.accent_blue};font-size:14px;font-weight:500;">{obligor.ticker}</span></div>' if obligor.ticker else ''}
+            <div style="margin-top:18px;display:flex;gap:28px;flex-wrap:wrap;padding-top:14px;border-top:1px solid {theme.bg_tertiary};">
+                <div><span style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">行业</span><br><span style="color:{sector_color};font-size:13px;font-weight:600;">{sector_label}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">子行业</span><br><span style="color:{theme.text_primary};font-size:13px;font-weight:500;">{obligor.sub_sector}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">区域</span><br><span style="color:{theme.text_primary};font-size:13px;font-weight:500;">{region_label}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">国家</span><br><span style="color:{theme.text_primary};font-size:13px;font-weight:500;">{obligor.country or 'N/A'}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">债券数</span><br><span style="color:{theme.text_primary};font-size:13px;font-weight:500;">{len(exp.bonds)}</span></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    with col2:
+    with col_gauge:
+        gauge_svg = _render_risk_gauge_svg(risk_scores["composite"], size=150)
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-            <h4 style="color:{theme.text_primary};margin:0 0 20px 0;font-weight:600;font-size:14px;">敞口概览</h4>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:16px 12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);text-align:center;height:100%;">
+            <div style="font-size:10px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:4px;">COMPOSITE RISK</div>
+            {gauge_svg}
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_exposure:
+        # KPI metrics
+        total_dv01 = exp.credit_dv01_usd
+        avg_coupon = np.mean([b.coupon for b in exp.bonds]) if exp.bonds else 0
+        avg_ytm = np.mean([b.years_to_maturity for b in exp.bonds]) if exp.bonds else 0
+        st.markdown(f"""
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:10px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.08em;font-weight:600;margin-bottom:16px;">EXPOSURE SUMMARY</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
                 <div>
-                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">市值</div>
-                    <div style="color:{theme.text_primary};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">${exp.total_market_usd/1e6:,.0f}M</div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">市值</div>
+                    <div style="color:{theme.text_primary};font-size:22px;font-weight:700;letter-spacing:-0.02em;">${exp.total_market_usd/1e6:,.0f}<span style="font-size:12px;font-weight:400;color:{theme.text_muted};">M</span></div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">占比</div>
-                    <div style="color:{theme.text_primary};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.pct_of_aum:.2%}</div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">占AUM</div>
+                    <div style="color:{theme.text_primary};font-size:22px;font-weight:700;letter-spacing:-0.02em;">{exp.pct_of_aum:.2%}</div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">加权久期</div>
-                    <div style="color:{theme.accent_blue};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.weighted_avg_duration:.2f}Y</div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">加权久期</div>
+                    <div style="color:{theme.accent_blue};font-size:20px;font-weight:700;">{exp.weighted_avg_duration:.2f}<span style="font-size:11px;font-weight:400;">Y</span></div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">加权OAS</div>
-                    <div style="color:{theme.accent_blue};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.weighted_avg_oas:.0f}bp</div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">加权OAS</div>
+                    <div style="color:{theme.accent_blue};font-size:20px;font-weight:700;">{exp.weighted_avg_oas:.0f}<span style="font-size:11px;font-weight:400;">bp</span></div>
+                </div>
+                <div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">Credit DV01</div>
+                    <div style="color:{theme.accent_purple};font-size:20px;font-weight:700;">${total_dv01/1e3:,.0f}<span style="font-size:11px;font-weight:400;">K</span></div>
+                </div>
+                <div>
+                    <div style="color:{theme.text_muted};font-size:9px;text-transform:uppercase;letter-spacing:0.05em;font-weight:500;">平均票息</div>
+                    <div style="color:{theme.accent_amber};font-size:20px;font-weight:700;">{avg_coupon:.2f}<span style="font-size:11px;font-weight:400;">%</span></div>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
-    # Bond Holdings
-    st.markdown("### 债券持仓")
-    bond_data = []
-    for bond in sorted(exp.bonds, key=lambda b: b.maturity_date):
-        bond_data.append({
-            "ISIN": bond.isin,
-            "货币": bond.currency,
-            "票息": f"{bond.coupon:.2f}%",
-            "到期日": bond.maturity_date.strftime("%Y-%m-%d"),
-            "剩余年限": f"{bond.years_to_maturity:.1f}",
-            "面值 ($M)": f"{bond.nominal_usd/1e6:,.1f}",
-            "市值 ($M)": f"{bond.market_value_usd/1e6:,.1f}",
-            "久期": f"{bond.duration:.2f}",
-            "OAS": f"{bond.oas:.0f}" if bond.oas else "-",
-        })
-    if bond_data:
-        render_styled_table(pd.DataFrame(bond_data))
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
-    # Related Alerts & News
-    col1, col2 = st.columns(2)
+    # ══════════════════════════════════════════════════════════════════
+    # SECTION 2: Risk Score Breakdown Bar
+    # ══════════════════════════════════════════════════════════════════
+    score_cats = [
+        ("信用质量", "credit", theme.accent_green),
+        ("利差水平", "spread", theme.accent_blue),
+        ("集中度", "concentration", theme.accent_purple),
+        ("新闻情感", "news", theme.accent_amber),
+        ("预警状态", "alerts", theme.accent_coral),
+        ("流动性", "liquidity", theme.accent_teal),
+    ]
+    bars_html = ""
+    for label, key, color in score_cats:
+        val = risk_scores[key]
+        bar_width = max(2, val)
+        bars_html += f"""
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <div style="width:68px;font-size:11px;color:{theme.text_secondary};font-weight:500;text-align:right;">{label}</div>
+            <div style="flex:1;background:{theme.bg_tertiary};border-radius:4px;height:18px;overflow:hidden;">
+                <div style="width:{bar_width}%;height:100%;background:linear-gradient(90deg, {color}CC, {color});border-radius:4px;transition:width 0.5s ease;"></div>
+            </div>
+            <div style="width:36px;font-size:12px;font-weight:600;color:{theme.text_primary};text-align:right;">{val:.0f}</div>
+        </div>"""
 
-    with col1:
-        st.markdown("### 相关预警")
-        issuer_alerts = [a for a in alerts if a.obligor_id == selected_id]
-        if issuer_alerts:
-            for alert in issuer_alerts[:5]:
-                severity_color = NordicTheme.get_severity_color(alert.severity.value)
-                st.markdown(f"""
-                <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-left:3px solid {severity_color};padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0;">
-                    <div style="display:flex;justify-content:space-between;">
-                        <span style="color:{theme.text_primary};font-weight:500;font-size:13px;">{alert.message[:50]}</span>
-                        <span style="color:{theme.text_muted};font-size:11px;">{alert.timestamp.strftime('%m-%d %H:%M')}</span>
-                    </div>
-                    {f'<div style="color:{theme.text_secondary};margin-top:8px;font-size:12px;">{alert.ai_summary}</div>' if alert.ai_summary else ''}
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.success("暂无相关预警")
+    st.markdown(f"""
+    <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:18px 24px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span style="font-size:12px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">RISK SCORE BREAKDOWN</span>
+            <span style="font-size:11px;color:{theme.text_muted};">Composite: <b style="color:{theme.text_primary};font-size:14px;">{risk_scores['composite']:.0f}</b>/100</span>
+        </div>
+        {bars_html}
+    </div>
+    """, unsafe_allow_html=True)
 
-    with col2:
-        st.markdown("### 相关新闻")
-        issuer_news = [n for n in news_items if selected_id in n.obligor_ids]
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════
+    # SECTION 3: Tabbed Deep-Dive
+    # ══════════════════════════════════════════════════════════════════
+    tab_portfolio, tab_market, tab_news, tab_signals = st.tabs([
+        "债券组合 | Portfolio",
+        "市场 & 利差 | Market",
+        "新闻情报 | News Intel",
+        "风险信号 | Signals",
+    ])
+
+    # ── Tab 1: Bond Portfolio ─────────────────────────────────────────
+    with tab_portfolio:
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        col_curve, col_wall = st.columns([3, 2])
+        with col_curve:
+            fig_curve = _create_issuer_yield_curve(exp.bonds)
+            st.plotly_chart(fig_curve, use_container_width=True, config={'displayModeBar': False})
+        with col_wall:
+            fig_wall = _create_issuer_maturity_wall(exp.bonds)
+            st.plotly_chart(fig_wall, use_container_width=True, config={'displayModeBar': False})
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        # Bond Holdings Table
+        st.markdown(f"""
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <span style="font-size:14px;font-weight:600;color:{theme.text_primary};">债券持仓明细</span>
+            <span style="font-size:11px;color:{theme.text_muted};">{len(exp.bonds)} bonds · ${exp.total_nominal_usd/1e6:,.0f}M nominal</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        bond_data = []
+        for bond in sorted(exp.bonds, key=lambda b: b.maturity_date):
+            ytm = bond.years_to_maturity
+            ytm_color = theme.accent_coral if ytm < 1 else (theme.accent_amber if ytm < 2 else theme.text_primary)
+            bond_data.append({
+                "ISIN": bond.isin,
+                "债券名称": (bond.bond_name or "")[:25],
+                "货币": bond.currency,
+                "票息": f"{bond.coupon:.2f}%",
+                "到期日": bond.maturity_date.strftime("%Y-%m-%d"),
+                "剩余 (Y)": f"{ytm:.1f}",
+                "面值 ($M)": f"{bond.nominal_usd/1e6:,.1f}",
+                "市值 ($M)": f"{bond.market_value_usd/1e6:,.1f}",
+                "久期": f"{bond.duration:.2f}",
+                "OAS (bp)": f"{bond.oas:.0f}" if bond.oas else "-",
+                "DV01 ($K)": f"{bond.credit_dv01/1e3:,.1f}",
+            })
+        if bond_data:
+            render_styled_table(pd.DataFrame(bond_data), max_height="360px")
+
+    # ── Tab 2: Market & Spread ────────────────────────────────────────
+    with tab_market:
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        # OAS History
+        fig_oas = _create_issuer_oas_history(selected_id, exp.weighted_avg_oas)
+        st.plotly_chart(fig_oas, use_container_width=True, config={'displayModeBar': False})
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        col_peer, col_radar = st.columns([3, 2])
+        with col_peer:
+            fig_peer = _create_peer_comparison_chart(obligor, exp, exposures)
+            st.plotly_chart(fig_peer, use_container_width=True, config={'displayModeBar': False})
+
+        with col_radar:
+            # Risk radar chart
+            categories = ['信用', '利差', '集中度', '情感', '预警', '流动性']
+            values = [risk_scores['credit'], risk_scores['spread'], risk_scores['concentration'],
+                      risk_scores['news'], risk_scores['alerts'], risk_scores['liquidity']]
+            values_closed = values + [values[0]]
+            categories_closed = categories + [categories[0]]
+
+            fig_radar = go.Figure()
+            fig_radar.add_trace(go.Scatterpolar(
+                r=values_closed, theta=categories_closed,
+                fill='toself',
+                fillcolor=f'{theme.accent_blue}20',
+                line=dict(color=theme.accent_blue, width=2),
+                marker=dict(size=6, color=theme.accent_blue),
+                name='Risk Profile',
+            ))
+            fig_radar.update_layout(
+                polar=dict(
+                    radialaxis=dict(visible=True, range=[0, 100], showticklabels=True,
+                                    tickfont=dict(size=9, color=theme.text_muted),
+                                    gridcolor=theme.border_light),
+                    angularaxis=dict(tickfont=dict(size=11, color=theme.text_secondary),
+                                     gridcolor=theme.border_light),
+                    bgcolor=theme.bg_secondary,
+                ),
+                paper_bgcolor=theme.bg_secondary,
+                height=320,
+                margin=dict(l=60, r=60, t=40, b=40),
+                title=dict(text="风险画像 | Risk Radar", font=dict(size=14, color=theme.text_primary), x=0.02),
+                showlegend=False,
+                font=dict(family="Inter, sans-serif"),
+            )
+            st.plotly_chart(fig_radar, use_container_width=True, config={'displayModeBar': False})
+
+    # ── Tab 3: News Intelligence ──────────────────────────────────────
+    with tab_news:
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
         if issuer_news:
-            for news in issuer_news[:5]:
+            # Sentiment summary bar
+            pos_count = sum(1 for n in issuer_news if n.sentiment == Sentiment.POSITIVE)
+            neg_count = sum(1 for n in issuer_news if n.sentiment == Sentiment.NEGATIVE)
+            neu_count = len(issuer_news) - pos_count - neg_count
+            total_n = len(issuer_news)
+            avg_sent = np.mean([n.sentiment_score for n in issuer_news if n.sentiment_score is not None] or [0])
+
+            st.markdown(f"""
+            <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:16px 24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <span style="font-size:12px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.06em;font-weight:600;">NEWS SENTIMENT OVERVIEW</span>
+                    <span style="font-size:11px;color:{theme.text_muted};">{total_n} articles · Avg: <b style="color:{'#4CAF7C' if avg_sent > 0.1 else ('#E57373' if avg_sent < -0.1 else theme.text_primary)};">{avg_sent:.2f}</b></span>
+                </div>
+                <div style="display:flex;gap:16px;align-items:center;">
+                    <div style="display:flex;gap:4px;flex:1;height:8px;border-radius:4px;overflow:hidden;">
+                        <div style="width:{pos_count/total_n*100:.0f}%;background:{theme.accent_green};border-radius:4px 0 0 4px;"></div>
+                        <div style="width:{neu_count/total_n*100:.0f}%;background:{theme.border_light};"></div>
+                        <div style="width:{neg_count/total_n*100:.0f}%;background:{theme.accent_coral};border-radius:0 4px 4px 0;"></div>
+                    </div>
+                    <div style="display:flex;gap:12px;font-size:11px;">
+                        <span style="color:{theme.accent_green};font-weight:500;">+{pos_count}</span>
+                        <span style="color:{theme.text_muted};">~{neu_count}</span>
+                        <span style="color:{theme.accent_coral};font-weight:500;">-{neg_count}</span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Sentiment Timeline
+            fig_sent = _create_sentiment_timeline(issuer_news)
+            st.plotly_chart(fig_sent, use_container_width=True, config={'displayModeBar': False})
+
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+            # News Cards (enriched)
+            for news in sorted(issuer_news, key=lambda n: n.timestamp, reverse=True):
                 sentiment_color = {
                     Sentiment.POSITIVE: theme.accent_green,
                     Sentiment.NEUTRAL: theme.text_muted,
                     Sentiment.NEGATIVE: theme.accent_coral,
                 }.get(news.sentiment, theme.text_muted)
+                sentiment_label = {
+                    Sentiment.POSITIVE: "POSITIVE",
+                    Sentiment.NEUTRAL: "NEUTRAL",
+                    Sentiment.NEGATIVE: "NEGATIVE",
+                }.get(news.sentiment, "N/A")
+                score_val = news.sentiment_score if news.sentiment_score is not None else 0
+                time_str = news.timestamp.strftime("%m-%d %H:%M")
+
+                # Determine impact indicator
+                impact_bar = ""
+                if abs(score_val) > 0.6:
+                    impact_bar = f'<span style="background:{theme.severity_critical}20;color:{theme.severity_critical};padding:2px 8px;border-radius:4px;font-size:9px;font-weight:600;margin-left:6px;">HIGH IMPACT</span>'
+                elif abs(score_val) > 0.3:
+                    impact_bar = f'<span style="background:{theme.severity_warning}20;color:{theme.severity_warning};padding:2px 8px;border-radius:4px;font-size:9px;font-weight:600;margin-left:6px;">MEDIUM</span>'
+
                 st.markdown(f"""
-                <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-left:3px solid {sentiment_color};padding:12px 16px;margin:8px 0;border-radius:0 8px 8px 0;">
-                    <div style="display:flex;justify-content:space-between;">
-                        <span style="color:{theme.text_primary};font-weight:500;font-size:13px;">{news.title[:40]}...</span>
-                        <span style="color:{theme.text_muted};font-size:11px;">{news.source}</span>
+                <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-left:4px solid {sentiment_color};padding:16px 20px;margin:8px 0;border-radius:0 10px 10px 0;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                        <div style="flex:1;">
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <span style="color:{theme.text_primary};font-weight:600;font-size:14px;line-height:1.4;">{news.title}</span>
+                            </div>
+                            <div style="display:flex;gap:10px;margin-top:6px;align-items:center;">
+                                <span style="background:{theme.bg_tertiary};padding:2px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">{news.source}</span>
+                                <span style="font-size:10px;color:{theme.text_muted};">{time_str}</span>
+                                <span style="background:{sentiment_color}18;color:{sentiment_color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">{sentiment_label} {score_val:+.2f}</span>
+                                {impact_bar}
+                            </div>
+                        </div>
                     </div>
-                    <div style="color:{theme.text_secondary};margin-top:6px;font-size:12px;">{news.summary or ''}</div>
+                    {f'<div style="color:{theme.text_secondary};margin-top:10px;font-size:12px;line-height:1.6;padding:10px 12px;background:{theme.bg_primary};border-radius:6px;border:1px solid {theme.bg_tertiary};">💡 <b>AI Summary:</b> {news.summary}</div>' if news.summary else ''}
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            st.info("暂无相关新闻")
+            st.markdown(f"""
+            <div style="text-align:center;padding:60px 20px;color:{theme.text_muted};">
+                <div style="font-size:36px;margin-bottom:12px;">📰</div>
+                <div style="font-size:14px;">暂无该发行人相关新闻</div>
+                <div style="font-size:12px;margin-top:4px;">No news available for this issuer</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ── Tab 4: Risk Signals & Relationships ───────────────────────────
+    with tab_signals:
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        col_alerts, col_rel = st.columns([3, 2])
+
+        with col_alerts:
+            st.markdown(f"""
+            <div style="font-size:14px;font-weight:600;color:{theme.text_primary};margin-bottom:12px;">活跃预警 | Active Alerts</div>
+            """, unsafe_allow_html=True)
+
+            if issuer_alerts:
+                for alert in sorted(issuer_alerts, key=lambda a: (0 if a.severity == Severity.CRITICAL else 1, -a.timestamp.timestamp())):
+                    severity_color = NordicTheme.get_severity_color(alert.severity.value)
+                    severity_icon = {"CRITICAL": "●", "WARNING": "▲", "INFO": "○"}.get(alert.severity.value, "○")
+                    category_map = {"CONCENTRATION": "集中度", "RATING": "评级", "SPREAD": "利差", "NEWS": "新闻"}
+                    status_map = {"PENDING": "待处理", "INVESTIGATING": "调查中", "RESOLVED": "已解决", "DISMISSED": "已忽略", "ESCALATED": "已升级"}
+                    cat_label = category_map.get(alert.category.value, alert.category.value)
+                    status_label = status_map.get(alert.status.value, alert.status.value)
+
+                    st.markdown(f"""
+                    <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-left:4px solid {severity_color};padding:14px 18px;margin:8px 0;border-radius:0 10px 10px 0;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="color:{severity_color};font-size:14px;">{severity_icon}</span>
+                                <span style="color:{theme.text_primary};font-weight:500;font-size:13px;">{alert.message}</span>
+                            </div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span style="background:{theme.bg_tertiary};padding:2px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">{cat_label}</span>
+                                <span style="background:{theme.bg_tertiary};padding:2px 8px;border-radius:4px;font-size:10px;color:{theme.text_secondary};font-weight:500;">{status_label}</span>
+                            </div>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-top:8px;">
+                            <span style="color:{theme.text_muted};font-size:11px;">{alert.timestamp.strftime('%Y-%m-%d %H:%M')}</span>
+                            <span style="color:{theme.text_muted};font-size:11px;">指标: {alert.metric_value:.2f} / 阈值: {alert.threshold:.2f}</span>
+                        </div>
+                        {f'<div style="color:{theme.text_secondary};margin-top:10px;font-size:12px;line-height:1.5;padding:8px 12px;background:{theme.bg_primary};border-radius:6px;border:1px solid {theme.bg_tertiary};">🤖 {alert.ai_summary}</div>' if alert.ai_summary else ''}
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="text-align:center;padding:40px 20px;color:{theme.accent_green};background:{theme.accent_green}08;border-radius:10px;border:1px solid {theme.accent_green}20;">
+                    <div style="font-size:24px;margin-bottom:8px;">✓</div>
+                    <div style="font-size:13px;font-weight:500;">无活跃预警</div>
+                    <div style="font-size:11px;color:{theme.text_muted};margin-top:4px;">All signals within normal range</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        with col_rel:
+            # Relationship Map
+            st.markdown(f"""
+            <div style="font-size:14px;font-weight:600;color:{theme.text_primary};margin-bottom:12px;">关联图谱 | Relationship Map</div>
+            """, unsafe_allow_html=True)
+
+            relationships = OBLIGOR_RELATIONSHIPS
+            related_entities = []
+
+            # Find relationships where this obligor is involved
+            if selected_id in relationships:
+                rel = relationships[selected_id]
+                if "parent" in rel:
+                    parent_id = rel["parent"]
+                    parent_ob = obligors.get(parent_id)
+                    if parent_ob:
+                        related_entities.append(("parent", parent_ob, rel.get("relationship", "母公司"), rel.get("support_level", "")))
+                if "guarantor" in rel:
+                    g_id = rel["guarantor"]
+                    g_ob = obligors.get(g_id)
+                    if g_ob:
+                        related_entities.append(("guarantor", g_ob, rel.get("relationship", "担保"), ""))
+
+            # Find children
+            for oid, rel in relationships.items():
+                if rel.get("parent") == selected_id:
+                    child_ob = obligors.get(oid)
+                    if child_ob:
+                        related_entities.append(("child", child_ob, rel.get("relationship", "子公司"), rel.get("support_level", "")))
+                if rel.get("guarantor") == selected_id:
+                    g_ob = obligors.get(oid)
+                    if g_ob:
+                        related_entities.append(("guaranteed", g_ob, rel.get("relationship", "被担保"), ""))
+
+            if related_entities:
+                for rel_type, rel_ob, rel_label, support in related_entities:
+                    icon = {"parent": "⬆", "child": "⬇", "guarantor": "🛡", "guaranteed": "🔗"}.get(rel_type, "·")
+                    type_label = {"parent": "母公司", "child": "子公司", "guarantor": "担保方", "guaranteed": "被担保方"}.get(rel_type, rel_label)
+                    rel_rating_color = NordicTheme.get_rating_color(rel_ob.rating_internal.value)
+                    support_html = f'<span style="background:{theme.bg_tertiary};padding:1px 6px;border-radius:3px;font-size:9px;color:{theme.text_muted};margin-left:4px;">支持: {support}</span>' if support else ""
+
+                    st.markdown(f"""
+                    <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};padding:12px 16px;margin:6px 0;border-radius:8px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <span style="margin-right:6px;">{icon}</span>
+                                <span style="color:{theme.text_primary};font-weight:500;font-size:13px;">{rel_ob.name_cn}</span>
+                                {support_html}
+                            </div>
+                            <span style="background:{rel_rating_color};color:white;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">{rel_ob.rating_internal.value}</span>
+                        </div>
+                        <div style="margin-top:6px;display:flex;gap:8px;">
+                            <span style="font-size:10px;color:{theme.text_muted};background:{theme.bg_tertiary};padding:2px 6px;border-radius:3px;">{type_label}</span>
+                            <span style="font-size:10px;color:{theme.text_muted};background:{theme.bg_tertiary};padding:2px 6px;border-radius:3px;">{rel_ob.sector.value}</span>
+                            <span style="font-size:10px;color:{theme.text_muted};">{rel_ob.rating_outlook.value}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Related group total exposure
+                group_ids = [selected_id] + [e[1].obligor_id for e in related_entities]
+                group_exposure = sum(e.total_market_usd for e in exposures if e.obligor.obligor_id in group_ids)
+                group_pct = group_exposure / 50e9
+
+                st.markdown(f"""
+                <div style="background:{theme.accent_blue}08;border:1px solid {theme.accent_blue}20;border-radius:8px;padding:12px 16px;margin-top:12px;">
+                    <div style="font-size:10px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">GROUP EXPOSURE</div>
+                    <div style="display:flex;justify-content:space-between;margin-top:6px;">
+                        <span style="color:{theme.text_primary};font-size:18px;font-weight:700;">${group_exposure/1e6:,.0f}M</span>
+                        <span style="color:{theme.accent_blue};font-size:14px;font-weight:600;">{group_pct:.2%} AUM</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="text-align:center;padding:40px 20px;color:{theme.text_muted};background:{theme.bg_tertiary};border-radius:10px;">
+                    <div style="font-size:24px;margin-bottom:8px;">🔗</div>
+                    <div style="font-size:12px;">暂无已知关联实体</div>
+                    <div style="font-size:11px;margin-top:4px;">No known relationships</div>
+                </div>
+                """, unsafe_allow_html=True)
 
 
 def render_alerts_page():

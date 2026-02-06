@@ -284,18 +284,21 @@ credit_bond_risk/
 │       └── AnomalyDetector        # 统计异常检测
 │
 ├── ui/                      # 展示层 - Streamlit Dashboard
-│   ├── dashboard.py         # 主Dashboard (多页面)
+│   ├── dashboard.py         # 备选Dashboard (暗色主题)
 │   └── components/          # 可复用UI组件
 │       ├── charts.py            # Plotly可视化
 │       ├── alert_table.py       # 预警表格
 │       ├── obligor_card.py      # 发行人卡片
-│       └── color_scheme.py      # 配色方案
+│       └── color_scheme.py      # 配色方案 (Nordic + Dark双主题)
+│
+├── .streamlit/              # Streamlit配置
+│   └── config.toml          # 强制Light模式 + Nordic主题色
 │
 ├── scripts/                 # 运维脚本
 │   ├── init_db.py           # 初始化信用数据库
 │   └── sync_news.py         # 定时同步新闻 (uses data.news_fetcher)
 │
-└── app.py                   # Streamlit独立入口
+└── app.py                   # Streamlit主入口 (Nordic Scandinavian UI)
 ```
 
 ### 3.2 Data Layer Design (NEW)
@@ -902,6 +905,7 @@ if st.button("查看信用风险详情"):
 - [x] **Phase 4**: Dashboard MVP (Streamlit multi-page)
 - [x] **Phase 5**: International issuers support
 - [x] **Phase 6**: Data layer refactoring (Provider pattern, News/Market/Filing modules)
+- [x] **Phase 6.5**: Nordic Scandinavian UI redesign + Table styling fix
 - [ ] **Phase 7**: Alert workflow automation
 - [ ] **Phase 8**: Mobile notifications (企业微信)
 - [ ] **Phase 9**: Historical backtesting framework
@@ -941,5 +945,49 @@ python scripts/sync_news.py
 
 ---
 
+## 12. UI Design System
+
+### 12.1 Theme Architecture
+
+平台采用**斯堪的纳维亚极简设计 (Scandinavian Minimal Design)**，核心原则：
+
+| 原则 | 实现 |
+|------|------|
+| **Light-First** | `.streamlit/config.toml` 强制 `base = "light"` |
+| **Warm Whites** | 主背景 `#FAFAFA`，卡片 `#FFFFFF`，分隔 `#F5F5F5` |
+| **Soft Contrast** | 主文字 `#1A1A2E`，次要 `#4A4A68`，辅助 `#8E8EA0` |
+| **Nature Palette** | 蓝 `#5B8DEF`，绿 `#4CAF7C`，琥珀 `#E5A94D`，珊瑚 `#E57373` |
+| **Micro Shadows** | `0 1px 3px rgba(0,0,0,0.04)` 极轻阴影 |
+
+### 12.2 Table Rendering Strategy
+
+为避免 Streamlit `st.dataframe` 暗色模式与 Nordic 浅色主题冲突：
+
+1. **`.streamlit/config.toml`**: 在配置层强制 `base = "light"` 主题
+2. **CSS Overrides**: 全局 CSS 覆盖 `glideDataEditor` / `.stDataFrame` 内部样式
+3. **HTML Tables**: 关键数据表（预警、区域分解、Top Risk 等）使用 `render_styled_table()` 渲染自定义 HTML 表格
+4. **Plotly Charts**: 所有图表通过 `get_nordic_layout()` 统一配色
+
+### 12.3 Component Hierarchy
+
+```
+NordicTheme (dataclass)          # 配色常量定义
+├── render_kpi_card()            # KPI指标卡片
+├── render_styled_table()        # 标准化HTML表格
+├── render_alert_badge()         # 预警徽章
+├── render_alert_table()         # 预警表格 (HTML渲染)
+├── get_nordic_layout()          # Plotly图表布局模板
+└── create_*_chart()             # 各类Plotly图表
+```
+
+### 12.4 Dual Theme Support
+
+| 入口 | 主题 | 用途 |
+|------|------|------|
+| `app.py` | Nordic Light (主) | 日常监控，长时间使用 |
+| `ui/dashboard.py` | Premium Dark (备) | 演示/展示 |
+
+---
+
 *Last Updated: 2026-02*
-*Version: 2.1 (Data Layer Refactoring)*
+*Version: 3.1 (Nordic UI + Table Fix)*

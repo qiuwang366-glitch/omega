@@ -718,6 +718,46 @@ def generate_mock_data() -> tuple[dict[str, Obligor], list[CreditExposure], list
 # =============================================================================
 
 
+def render_styled_table(df: pd.DataFrame, max_height: str = "auto"):
+    """渲染北欧风格HTML表格 - 替代st.dataframe以确保主题一致"""
+    theme = NordicTheme()
+    if df.empty:
+        st.info("暂无数据")
+        return
+
+    # Header
+    header_cells = "".join(
+        f'<th style="padding:12px 14px;color:{theme.text_muted};font-size:11px;font-weight:600;'
+        f'text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid {theme.border_light};'
+        f'text-align:left;white-space:nowrap;">{col}</th>'
+        for col in df.columns
+    )
+
+    # Rows
+    rows_html = ""
+    for i, (_, row) in enumerate(df.iterrows()):
+        bg = theme.bg_secondary if i % 2 == 0 else theme.bg_primary
+        cells = "".join(
+            f'<td style="padding:10px 14px;color:{theme.text_primary};font-size:13px;'
+            f'border-bottom:1px solid {theme.bg_tertiary};white-space:nowrap;">{val}</td>'
+            for val in row
+        )
+        rows_html += f'<tr style="background:{bg};">{cells}</tr>'
+
+    overflow_style = f"max-height:{max_height};overflow-y:auto;" if max_height != "auto" else ""
+
+    st.markdown(f"""
+    <div style="border:1px solid {theme.border_light};border-radius:12px;overflow:hidden;background:{theme.bg_secondary};{overflow_style}">
+        <table style="width:100%;border-collapse:collapse;font-family:'Inter',-apple-system,sans-serif;">
+            <thead style="position:sticky;top:0;z-index:1;">
+                <tr style="background:{theme.bg_tertiary};">{header_cells}</tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def render_kpi_card(title: str, value: str, subtitle: str = "", delta: str = "", delta_color: str = "normal"):
     """渲染KPI卡片 - 北欧极简风格"""
     theme = NordicTheme()
@@ -730,13 +770,15 @@ def render_kpi_card(title: str, value: str, subtitle: str = "", delta: str = "",
     <div style="
         background:{theme.bg_secondary};
         border:1px solid {theme.border_light};
-        border-radius:12px;
-        padding:20px 24px;
+        border-radius:14px;
+        padding:22px 24px;
         text-align:left;
+        box-shadow:0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
+        transition: box-shadow 0.2s ease, transform 0.2s ease;
     ">
-        <div style="font-size:12px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">{title}</div>
-        <div style="font-size:28px;font-weight:600;color:{theme.text_primary};line-height:1.2;">{value}</div>
-        {f'<div style="font-size:12px;color:{theme.text_secondary};margin-top:6px;">{subtitle}</div>' if subtitle else ''}
+        <div style="font-size:11px;color:{theme.text_muted};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;font-weight:500;">{title}</div>
+        <div style="font-size:30px;font-weight:600;color:{theme.text_primary};line-height:1.15;letter-spacing:-0.02em;">{value}</div>
+        {f'<div style="font-size:12px;color:{theme.text_secondary};margin-top:8px;">{subtitle}</div>' if subtitle else ''}
         {delta_html}
     </div>
     """, unsafe_allow_html=True)
@@ -802,14 +844,51 @@ def render_alert_table(alerts: list[RiskAlert], show_filters: bool = True) -> li
         })
 
     if table_data:
-        df = pd.DataFrame(table_data)
-        st.dataframe(df, use_container_width=True, hide_index=True, height=400)
+        # Render styled HTML table for consistent light theme
+        rows_html = ""
+        for i, row in enumerate(table_data):
+            severity_val = row["级别"]
+            severity_color = NordicTheme.get_severity_color(
+                "CRITICAL" if severity_val == "●" and i < len(filtered_alerts) and filtered_alerts[i].severity == Severity.CRITICAL
+                else "WARNING" if severity_val == "●" and i < len(filtered_alerts) and filtered_alerts[i].severity == Severity.WARNING
+                else "INFO"
+            )
+            bg = theme.bg_secondary if i % 2 == 0 else theme.bg_primary
+            rows_html += f"""
+            <tr style="background:{bg};">
+                <td style="padding:10px 12px;color:{severity_color};font-size:16px;text-align:center;border-bottom:1px solid {theme.border_light};">{row['级别']}</td>
+                <td style="padding:10px 12px;color:{theme.text_muted};font-size:12px;border-bottom:1px solid {theme.border_light};white-space:nowrap;">{row['时间']}</td>
+                <td style="padding:10px 12px;color:{theme.text_primary};font-weight:500;font-size:13px;border-bottom:1px solid {theme.border_light};">{row['发行人']}</td>
+                <td style="padding:10px 12px;color:{theme.text_secondary};font-size:12px;border-bottom:1px solid {theme.border_light};">{row['类别']}</td>
+                <td style="padding:10px 12px;color:{theme.text_primary};font-size:13px;border-bottom:1px solid {theme.border_light};max-width:300px;">{row['消息']}</td>
+                <td style="padding:10px 12px;border-bottom:1px solid {theme.border_light};">
+                    <span style="background:{theme.bg_tertiary};color:{theme.text_secondary};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:500;">{row['状态']}</span>
+                </td>
+            </tr>"""
+
+        st.markdown(f"""
+        <div style="border:1px solid {theme.border_light};border-radius:12px;overflow:hidden;background:{theme.bg_secondary};">
+            <table style="width:100%;border-collapse:collapse;font-family:'Inter',-apple-system,sans-serif;">
+                <thead>
+                    <tr style="background:{theme.bg_tertiary};">
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};width:40px;"></th>
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};text-align:left;">时间</th>
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};text-align:left;">发行人</th>
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};text-align:left;">类别</th>
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};text-align:left;">消息</th>
+                        <th style="padding:12px;color:{theme.text_muted};font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;border-bottom:2px solid {theme.border_light};text-align:left;">状态</th>
+                    </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Summary
     critical_count = sum(1 for a in filtered_alerts if a.severity == Severity.CRITICAL)
     warning_count = sum(1 for a in filtered_alerts if a.severity == Severity.WARNING)
     st.markdown(f"""
-    <div style="display:flex;gap:12px;margin-top:12px;">
+    <div style="display:flex;gap:12px;margin-top:16px;align-items:center;">
         {render_alert_badge("CRITICAL", critical_count)}
         {render_alert_badge("WARNING", warning_count)}
         <span style="color:{theme.text_muted};font-size:12px;line-height:24px;">共 {len(filtered_alerts)} 条预警</span>
@@ -905,8 +984,11 @@ def render_panorama_page():
 
     # Executive Summary
     st.markdown(f"""
-    <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:24px;margin-bottom:24px;">
-        <h3 style="color:{theme.text_primary};margin:0 0 16px 0;font-weight:500;">执行摘要 | Executive Summary</h3>
+    <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:28px;margin-bottom:28px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+            <div style="width:4px;height:20px;background:linear-gradient(180deg,{theme.accent_blue},{theme.accent_purple});border-radius:2px;"></div>
+            <h3 style="color:{theme.text_primary};margin:0;font-weight:600;font-size:16px;">执行摘要 | Executive Summary</h3>
+        </div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;">
     """, unsafe_allow_html=True)
 
@@ -918,41 +1000,44 @@ def render_panorama_page():
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"""
-        <div style="text-align:center;padding:16px;background:{theme.bg_tertiary};border-radius:8px;">
-            <div style="font-size:11px;color:{theme.text_muted};margin-bottom:8px;">投资级敞口</div>
-            <div style="font-size:24px;font-weight:600;color:{theme.accent_green};">${ig_exposure/1e9:.2f}B</div>
-            <div style="font-size:12px;color:{theme.text_secondary};">{ig_exposure/total_market:.1%}</div>
+        <div style="text-align:center;padding:20px 16px;background:{theme.bg_tertiary};border-radius:10px;border:1px solid {theme.border_light};">
+            <div style="font-size:10px;color:{theme.text_muted};margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500;">投资级敞口</div>
+            <div style="font-size:26px;font-weight:700;color:{theme.accent_green};letter-spacing:-0.02em;">${ig_exposure/1e9:.2f}B</div>
+            <div style="font-size:12px;color:{theme.text_secondary};margin-top:4px;">{ig_exposure/total_market:.1%}</div>
         </div>
         """, unsafe_allow_html=True)
     with col2:
         st.markdown(f"""
-        <div style="text-align:center;padding:16px;background:{theme.bg_tertiary};border-radius:8px;">
-            <div style="font-size:11px;color:{theme.text_muted};margin-bottom:8px;">高收益敞口</div>
-            <div style="font-size:24px;font-weight:600;color:{theme.accent_coral};">${hy_exposure/1e9:.2f}B</div>
-            <div style="font-size:12px;color:{theme.text_secondary};">{hy_exposure/total_market:.1%}</div>
+        <div style="text-align:center;padding:20px 16px;background:{theme.bg_tertiary};border-radius:10px;border:1px solid {theme.border_light};">
+            <div style="font-size:10px;color:{theme.text_muted};margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500;">高收益敞口</div>
+            <div style="font-size:26px;font-weight:700;color:{theme.accent_coral};letter-spacing:-0.02em;">${hy_exposure/1e9:.2f}B</div>
+            <div style="font-size:12px;color:{theme.text_secondary};margin-top:4px;">{hy_exposure/total_market:.1%}</div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
         st.markdown(f"""
-        <div style="text-align:center;padding:16px;background:{theme.bg_tertiary};border-radius:8px;">
-            <div style="font-size:11px;color:{theme.text_muted};margin-bottom:8px;">信用DV01</div>
-            <div style="font-size:24px;font-weight:600;color:{theme.accent_blue};">${total_dv01/1e6:.2f}M</div>
-            <div style="font-size:12px;color:{theme.text_secondary};">每bp变动</div>
+        <div style="text-align:center;padding:20px 16px;background:{theme.bg_tertiary};border-radius:10px;border:1px solid {theme.border_light};">
+            <div style="font-size:10px;color:{theme.text_muted};margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500;">信用DV01</div>
+            <div style="font-size:26px;font-weight:700;color:{theme.accent_blue};letter-spacing:-0.02em;">${total_dv01/1e6:.2f}M</div>
+            <div style="font-size:12px;color:{theme.text_secondary};margin-top:4px;">每bp变动</div>
         </div>
         """, unsafe_allow_html=True)
     with col4:
         st.markdown(f"""
-        <div style="text-align:center;padding:16px;background:{theme.bg_tertiary};border-radius:8px;">
-            <div style="font-size:11px;color:{theme.text_muted};margin-bottom:8px;">负面展望</div>
-            <div style="font-size:24px;font-weight:600;color:{theme.accent_amber};">{neg_outlook}</div>
-            <div style="font-size:12px;color:{theme.text_secondary};">发行人</div>
+        <div style="text-align:center;padding:20px 16px;background:{theme.bg_tertiary};border-radius:10px;border:1px solid {theme.border_light};">
+            <div style="font-size:10px;color:{theme.text_muted};margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:500;">负面展望</div>
+            <div style="font-size:26px;font-weight:700;color:{theme.accent_amber};letter-spacing:-0.02em;">{neg_outlook}</div>
+            <div style="font-size:12px;color:{theme.text_secondary};margin-top:4px;">发行人</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
     # Regional Breakdown
-    st.markdown(f"### 区域风险分解")
+    st.markdown(f"""<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="width:3px;height:16px;background:{theme.accent_blue};border-radius:2px;"></div>
+        <span style="color:{theme.text_primary};font-weight:600;font-size:15px;">区域风险分解</span>
+    </div>""", unsafe_allow_html=True)
     region_data = []
     for region in Region:
         region_exps = [e for e in exposures if e.obligor.region == region]
@@ -973,14 +1058,17 @@ def render_panorama_page():
             })
     if region_data:
         df_region = pd.DataFrame(region_data)
-        st.dataframe(df_region, use_container_width=True, hide_index=True)
+        render_styled_table(df_region)
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
     # Top Risk Exposures
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown(f"### 风险敞口 Top 10 (按DV01)")
+        st.markdown(f"""<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="width:3px;height:16px;background:{theme.accent_coral};border-radius:2px;"></div>
+            <span style="color:{theme.text_primary};font-weight:600;font-size:15px;">风险敞口 Top 10 (按DV01)</span>
+        </div>""", unsafe_allow_html=True)
         sorted_by_dv01 = sorted(exposures, key=lambda x: x.credit_dv01_usd, reverse=True)[:10]
         top_risk_data = []
         for exp in sorted_by_dv01:
@@ -991,10 +1079,13 @@ def render_panorama_page():
                 "市值": f"${exp.total_market_usd/1e6:,.0f}M",
                 "DV01": f"${exp.credit_dv01_usd/1e3:,.0f}K",
             })
-        st.dataframe(pd.DataFrame(top_risk_data), use_container_width=True, hide_index=True, height=380)
+        render_styled_table(pd.DataFrame(top_risk_data), max_height="380px")
 
     with col2:
-        st.markdown(f"### 关注名单 | Watchlist")
+        st.markdown(f"""<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="width:3px;height:16px;background:{theme.accent_amber};border-radius:2px;"></div>
+            <span style="color:{theme.text_primary};font-weight:600;font-size:15px;">关注名单 | Watchlist</span>
+        </div>""", unsafe_allow_html=True)
         watchlist = [e for e in exposures if e.obligor.rating_outlook in (RatingOutlook.NEGATIVE, RatingOutlook.WATCH_NEG)]
         if watchlist:
             watchlist_data = []
@@ -1007,7 +1098,7 @@ def render_panorama_page():
                     "市值": f"${exp.total_market_usd/1e6:,.0f}M",
                     "OAS": f"{exp.weighted_avg_oas:.0f}bp",
                 })
-            st.dataframe(pd.DataFrame(watchlist_data), use_container_width=True, hide_index=True, height=380)
+            render_styled_table(pd.DataFrame(watchlist_data), max_height="380px")
         else:
             st.success("暂无负面展望发行人")
 
@@ -1047,47 +1138,48 @@ def render_issuer_page():
     # Header Card
     col1, col2 = st.columns([2, 1])
     with col1:
+        sector_color = NordicTheme.get_sector_color(obligor.sector.value)
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:24px;border-left:4px solid {NordicTheme.get_sector_color(obligor.sector.value)};">
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:28px;border-left:4px solid {sector_color};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
                 <div>
-                    <h2 style="color:{theme.text_primary};margin:0;font-weight:500;">{obligor.name_cn}</h2>
-                    <p style="color:{theme.text_muted};margin:4px 0 0 0;font-size:14px;">{obligor.name_en or ''}</p>
+                    <h2 style="color:{theme.text_primary};margin:0;font-weight:600;font-size:20px;letter-spacing:-0.01em;">{obligor.name_cn}</h2>
+                    <p style="color:{theme.text_muted};margin:6px 0 0 0;font-size:13px;">{obligor.name_en or ''}</p>
                 </div>
                 <div style="text-align:right;">
-                    <span style="background:{rating_color};color:white;padding:8px 16px;border-radius:8px;font-weight:600;font-size:18px;">{obligor.rating_internal.value}</span>
-                    <p style="color:{theme.text_muted};margin:8px 0 0 0;font-size:13px;">{outlook_icon} {obligor.rating_outlook.value}</p>
+                    <span style="background:{rating_color};color:white;padding:10px 18px;border-radius:10px;font-weight:700;font-size:18px;letter-spacing:0.02em;box-shadow:0 2px 4px {rating_color}40;">{obligor.rating_internal.value}</span>
+                    <p style="color:{theme.text_muted};margin:10px 0 0 0;font-size:12px;">{outlook_icon} {obligor.rating_outlook.value}</p>
                 </div>
             </div>
-            <div style="margin-top:20px;display:flex;gap:32px;flex-wrap:wrap;">
-                <div><span style="color:{theme.text_muted};font-size:12px;">行业</span><br><span style="color:{theme.text_primary};">{obligor.sector.value}</span></div>
-                <div><span style="color:{theme.text_muted};font-size:12px;">区域</span><br><span style="color:{theme.text_primary};">{obligor.region.value.replace('_', ' ')}</span></div>
-                <div><span style="color:{theme.text_muted};font-size:12px;">国家</span><br><span style="color:{theme.text_primary};">{obligor.country or 'N/A'}</span></div>
-                {f'<div><span style="color:{theme.text_muted};font-size:12px;">代码</span><br><span style="color:{theme.accent_blue};">{obligor.ticker}</span></div>' if obligor.ticker else ''}
+            <div style="margin-top:24px;display:flex;gap:36px;flex-wrap:wrap;padding-top:16px;border-top:1px solid {theme.bg_tertiary};">
+                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">行业</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.sector.value}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">区域</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.region.value.replace('_', ' ')}</span></div>
+                <div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">国家</span><br><span style="color:{theme.text_primary};font-size:14px;font-weight:500;">{obligor.country or 'N/A'}</span></div>
+                {f'<div><span style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">代码</span><br><span style="color:{theme.accent_blue};font-size:14px;font-weight:500;">{obligor.ticker}</span></div>' if obligor.ticker else ''}
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     with col2:
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:24px;">
-            <h4 style="color:{theme.text_primary};margin:0 0 16px 0;font-weight:500;">敞口概览</h4>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <h4 style="color:{theme.text_primary};margin:0 0 20px 0;font-weight:600;font-size:14px;">敞口概览</h4>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
                 <div>
-                    <div style="color:{theme.text_muted};font-size:11px;">市值</div>
-                    <div style="color:{theme.text_primary};font-size:22px;font-weight:600;">${exp.total_market_usd/1e6:,.0f}M</div>
+                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">市值</div>
+                    <div style="color:{theme.text_primary};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">${exp.total_market_usd/1e6:,.0f}M</div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:11px;">占比</div>
-                    <div style="color:{theme.text_primary};font-size:22px;font-weight:600;">{exp.pct_of_aum:.2%}</div>
+                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">占比</div>
+                    <div style="color:{theme.text_primary};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.pct_of_aum:.2%}</div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:11px;">加权久期</div>
-                    <div style="color:{theme.text_primary};font-size:22px;font-weight:600;">{exp.weighted_avg_duration:.2f}Y</div>
+                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">加权久期</div>
+                    <div style="color:{theme.accent_blue};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.weighted_avg_duration:.2f}Y</div>
                 </div>
                 <div>
-                    <div style="color:{theme.text_muted};font-size:11px;">加权OAS</div>
-                    <div style="color:{theme.text_primary};font-size:22px;font-weight:600;">{exp.weighted_avg_oas:.0f}bp</div>
+                    <div style="color:{theme.text_muted};font-size:10px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">加权OAS</div>
+                    <div style="color:{theme.accent_blue};font-size:24px;font-weight:700;margin-top:4px;letter-spacing:-0.02em;">{exp.weighted_avg_oas:.0f}bp</div>
                 </div>
             </div>
         </div>
@@ -1111,7 +1203,7 @@ def render_issuer_page():
             "OAS": f"{bond.oas:.0f}" if bond.oas else "-",
         })
     if bond_data:
-        st.dataframe(pd.DataFrame(bond_data), use_container_width=True, hide_index=True)
+        render_styled_table(pd.DataFrame(bond_data))
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
@@ -1169,33 +1261,33 @@ def render_alerts_page():
     with col1:
         critical = len([a for a in alerts if a.severity == Severity.CRITICAL])
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:20px;text-align:center;border-top:3px solid {theme.severity_critical};">
-            <div style="font-size:32px;font-weight:600;color:{theme.severity_critical};">{critical}</div>
-            <div style="font-size:12px;color:{theme.text_muted};margin-top:4px;">严重预警</div>
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:24px 20px;text-align:center;border-top:3px solid {theme.severity_critical};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:36px;font-weight:700;color:{theme.severity_critical};letter-spacing:-0.02em;">{critical}</div>
+            <div style="font-size:11px;color:{theme.text_muted};margin-top:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">严重预警</div>
         </div>
         """, unsafe_allow_html=True)
     with col2:
         warning = len([a for a in alerts if a.severity == Severity.WARNING])
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:20px;text-align:center;border-top:3px solid {theme.severity_warning};">
-            <div style="font-size:32px;font-weight:600;color:{theme.severity_warning};">{warning}</div>
-            <div style="font-size:12px;color:{theme.text_muted};margin-top:4px;">警告</div>
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:24px 20px;text-align:center;border-top:3px solid {theme.severity_warning};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:36px;font-weight:700;color:{theme.severity_warning};letter-spacing:-0.02em;">{warning}</div>
+            <div style="font-size:11px;color:{theme.text_muted};margin-top:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">警告</div>
         </div>
         """, unsafe_allow_html=True)
     with col3:
         pending = len([a for a in alerts if a.status == AlertStatus.PENDING])
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:20px;text-align:center;border-top:3px solid {theme.accent_blue};">
-            <div style="font-size:32px;font-weight:600;color:{theme.accent_blue};">{pending}</div>
-            <div style="font-size:12px;color:{theme.text_muted};margin-top:4px;">待处理</div>
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:24px 20px;text-align:center;border-top:3px solid {theme.accent_blue};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:36px;font-weight:700;color:{theme.accent_blue};letter-spacing:-0.02em;">{pending}</div>
+            <div style="font-size:11px;color:{theme.text_muted};margin-top:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">待处理</div>
         </div>
         """, unsafe_allow_html=True)
     with col4:
         resolved = len([a for a in alerts if a.status == AlertStatus.RESOLVED])
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:12px;padding:20px;text-align:center;border-top:3px solid {theme.accent_green};">
-            <div style="font-size:32px;font-weight:600;color:{theme.accent_green};">{resolved}</div>
-            <div style="font-size:12px;color:{theme.text_muted};margin-top:4px;">已解决</div>
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:14px;padding:24px 20px;text-align:center;border-top:3px solid {theme.accent_green};box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:36px;font-weight:700;color:{theme.accent_green};letter-spacing:-0.02em;">{resolved}</div>
+            <div style="font-size:11px;color:{theme.text_muted};margin-top:6px;text-transform:uppercase;letter-spacing:0.06em;font-weight:500;">已解决</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1321,13 +1413,21 @@ def main():
     init_session_state()
     theme = NordicTheme()
 
-    # Custom CSS - Nordic Minimal Style
+    # Custom CSS - Nordic Minimal Style (Premium)
     st.markdown(f"""
     <style>
-    /* Base styles */
+    /* ===== Force Light Mode ===== */
+    :root {{
+        color-scheme: light !important;
+    }}
+
+    /* ===== Base Layout ===== */
     .stApp {{
         background-color: {theme.bg_primary};
+        font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
     }}
+
+    /* ===== Sidebar ===== */
     [data-testid="stSidebar"] {{
         background-color: {theme.bg_sidebar};
         border-right: 1px solid {theme.border_light};
@@ -1335,45 +1435,259 @@ def main():
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {{
         color: {theme.text_secondary};
     }}
-
-    /* Headers */
-    h1, h2, h3 {{
-        color: {theme.text_primary} !important;
-        font-weight: 500 !important;
-    }}
-
-    /* Metrics */
-    [data-testid="stMetricValue"] {{
-        color: {theme.text_primary};
-    }}
-    [data-testid="stMetricLabel"] {{
-        color: {theme.text_muted};
-    }}
-
-    /* Cards and containers */
-    .stDataFrame {{
-        border: 1px solid {theme.border_light};
-        border-radius: 8px;
-    }}
-
-    /* Radio buttons in sidebar */
     [data-testid="stSidebar"] .stRadio > label {{
         color: {theme.text_secondary};
     }}
+    [data-testid="stSidebar"] .stRadio [data-testid="stWidgetLabel"] {{
+        display: none;
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] label {{
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin: 2px 0;
+        transition: background-color 0.15s ease;
+    }}
+    [data-testid="stSidebar"] [role="radiogroup"] label:hover {{
+        background-color: {theme.bg_tertiary};
+    }}
 
-    /* Selectbox */
+    /* ===== Typography ===== */
+    h1 {{
+        color: {theme.text_primary} !important;
+        font-weight: 600 !important;
+        font-size: 1.6rem !important;
+        letter-spacing: -0.02em;
+    }}
+    h2, h3 {{
+        color: {theme.text_primary} !important;
+        font-weight: 500 !important;
+        letter-spacing: -0.01em;
+    }}
+    p, span, div {{
+        font-family: 'Inter', -apple-system, sans-serif;
+    }}
+
+    /* ===== Metrics ===== */
+    [data-testid="stMetricValue"] {{
+        color: {theme.text_primary};
+        font-weight: 600;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: {theme.text_muted};
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.05em;
+    }}
+
+    /* ===== DataFrames / Tables - CRITICAL FIX ===== */
+    .stDataFrame {{
+        border: 1px solid {theme.border_light};
+        border-radius: 10px;
+        overflow: hidden;
+    }}
+
+    /* Force light background on all dataframe internals */
+    .stDataFrame [data-testid="stDataFrameResizable"],
+    .stDataFrame iframe {{
+        background-color: {theme.bg_secondary} !important;
+        border-radius: 10px;
+    }}
+
+    /* Glide Data Editor (Streamlit's internal table renderer) */
+    .stDataFrame [data-testid="stDataFrameResizable"] {{
+        background: {theme.bg_secondary} !important;
+    }}
+
+    /* Override dark theme inside dataframe canvas */
+    .stDataFrame div[class*="glideDataEditor"],
+    .stDataFrame div[data-testid="glideDataEditor"] {{
+        background: {theme.bg_secondary} !important;
+    }}
+
+    /* Table cell backgrounds */
+    .stDataFrame .dvn-scroller {{
+        background: {theme.bg_secondary} !important;
+    }}
+
+    /* Header row styling */
+    .stDataFrame [data-testid="StyledDataFrameHeaderCell"],
+    .stDataFrame th {{
+        background-color: {theme.bg_tertiary} !important;
+        color: {theme.text_primary} !important;
+        font-weight: 600 !important;
+        font-size: 12px !important;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        border-bottom: 2px solid {theme.border_light} !important;
+    }}
+
+    /* Data cells */
+    .stDataFrame [data-testid="StyledDataFrameCell"],
+    .stDataFrame td {{
+        background-color: {theme.bg_secondary} !important;
+        color: {theme.text_primary} !important;
+        font-size: 13px !important;
+        border-bottom: 1px solid {theme.bg_tertiary} !important;
+    }}
+
+    /* Alternating row colors */
+    .stDataFrame [data-testid="StyledDataFrameCell"]:nth-child(even) {{
+        background-color: {theme.bg_primary} !important;
+    }}
+
+    /* DataEditor toolbar */
+    .stDataFrame [data-testid="stElementToolbar"] {{
+        background-color: {theme.bg_secondary} !important;
+        border-color: {theme.border_light} !important;
+    }}
+
+    /* Column config dropdown */
+    .stDataFrame [data-testid="column-header-cell"] {{
+        background-color: {theme.bg_tertiary} !important;
+        color: {theme.text_primary} !important;
+    }}
+
+    /* ===== Selectbox / Inputs ===== */
     .stSelectbox > div > div {{
         background-color: {theme.bg_secondary};
         border-color: {theme.border_light};
+        border-radius: 8px;
+    }}
+    .stSelectbox [data-baseweb="select"] {{
+        background-color: {theme.bg_secondary} !important;
+    }}
+    .stMultiSelect [data-baseweb="select"] {{
+        background-color: {theme.bg_secondary} !important;
+        border-color: {theme.border_light} !important;
     }}
 
-    /* Remove Streamlit branding */
+    /* ===== Buttons ===== */
+    .stButton > button {{
+        background-color: {theme.bg_secondary};
+        color: {theme.text_primary};
+        border: 1px solid {theme.border_light};
+        border-radius: 8px;
+        font-weight: 500;
+        font-size: 13px;
+        padding: 8px 16px;
+        transition: all 0.15s ease;
+    }}
+    .stButton > button:hover {{
+        background-color: {theme.bg_tertiary};
+        border-color: {theme.accent_blue};
+        color: {theme.accent_blue};
+    }}
+
+    /* ===== Tabs ===== */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 4px;
+        background-color: transparent;
+        border-bottom: 1px solid {theme.border_light};
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        background-color: transparent;
+        color: {theme.text_muted};
+        border-radius: 6px 6px 0 0;
+        padding: 10px 20px;
+        font-size: 13px;
+        font-weight: 500;
+    }}
+    .stTabs [data-baseweb="tab"]:hover {{
+        color: {theme.text_primary};
+        background-color: {theme.bg_tertiary};
+    }}
+    .stTabs [aria-selected="true"] {{
+        color: {theme.accent_blue} !important;
+        border-bottom: 2px solid {theme.accent_blue} !important;
+        background-color: transparent !important;
+    }}
+
+    /* ===== Chat ===== */
+    [data-testid="stChatMessage"] {{
+        background-color: {theme.bg_secondary} !important;
+        border: 1px solid {theme.border_light};
+        border-radius: 12px;
+        padding: 16px;
+    }}
+    .stChatInput > div {{
+        border-color: {theme.border_light} !important;
+        border-radius: 12px !important;
+    }}
+    .stChatInput textarea {{
+        background-color: {theme.bg_secondary} !important;
+        color: {theme.text_primary} !important;
+    }}
+
+    /* ===== Expander ===== */
+    .streamlit-expanderHeader {{
+        background-color: {theme.bg_secondary} !important;
+        border: 1px solid {theme.border_light};
+        border-radius: 8px;
+        color: {theme.text_primary} !important;
+        font-weight: 500;
+    }}
+    .streamlit-expanderContent {{
+        background-color: {theme.bg_secondary} !important;
+        border: 1px solid {theme.border_light};
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+    }}
+
+    /* ===== Alerts ===== */
+    .stAlert {{
+        background-color: {theme.bg_secondary} !important;
+        border: 1px solid {theme.border_light} !important;
+        border-radius: 8px;
+        color: {theme.text_primary} !important;
+    }}
+
+    /* ===== Spinner ===== */
+    .stSpinner > div {{
+        color: {theme.accent_blue} !important;
+    }}
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar {{
+        width: 6px;
+        height: 6px;
+    }}
+    ::-webkit-scrollbar-track {{
+        background: {theme.bg_primary};
+    }}
+    ::-webkit-scrollbar-thumb {{
+        background: {theme.border_light};
+        border-radius: 3px;
+    }}
+    ::-webkit-scrollbar-thumb:hover {{
+        background: {theme.text_light};
+    }}
+
+    /* ===== Remove Streamlit Branding ===== */
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
+    header {{visibility: hidden;}}
 
-    /* Smooth transitions */
-    * {{
-        transition: background-color 0.2s ease, border-color 0.2s ease;
+    /* ===== Smooth Transitions ===== */
+    .stDataFrame, .stButton > button, .stSelectbox, .stMultiSelect {{
+        transition: all 0.15s ease;
+    }}
+
+    /* ===== Plotly Chart Container ===== */
+    [data-testid="stPlotlyChart"] {{
+        border: 1px solid {theme.border_light};
+        border-radius: 12px;
+        overflow: hidden;
+        background: {theme.bg_secondary};
+    }}
+
+    /* ===== Caption / Small Text ===== */
+    .stCaption, [data-testid="stCaptionContainer"] {{
+        color: {theme.text_muted} !important;
+    }}
+
+    /* ===== Divider ===== */
+    hr {{
+        border-color: {theme.border_light} !important;
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -1381,9 +1695,16 @@ def main():
     # Sidebar
     with st.sidebar:
         st.markdown(f"""
-        <div style="padding:8px 0 16px 0;">
-            <h2 style="color:{theme.text_primary};margin:0;font-weight:500;">◈ 信用债风险平台</h2>
-            <p style="color:{theme.text_muted};font-size:12px;margin:8px 0 0 0;">Credit Risk Intelligence</p>
+        <div style="padding:12px 0 20px 0;border-bottom:1px solid {theme.border_light};margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:32px;height:32px;background:linear-gradient(135deg,{theme.accent_blue},{theme.accent_purple});border-radius:8px;display:flex;align-items:center;justify-content:center;">
+                    <span style="color:white;font-size:16px;font-weight:700;">◈</span>
+                </div>
+                <div>
+                    <h2 style="color:{theme.text_primary};margin:0;font-weight:600;font-size:16px;letter-spacing:-0.01em;">信用债风险平台</h2>
+                    <p style="color:{theme.text_muted};font-size:11px;margin:2px 0 0 0;letter-spacing:0.02em;">Credit Risk Intelligence</p>
+                </div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -1410,16 +1731,21 @@ def main():
         total_mv = sum(e.total_market_usd for e in exposures)
         total_issuers = len([e for e in exposures if e.total_market_usd > 0])
 
+        avg_oas_sidebar = sum(e.weighted_avg_oas * e.total_market_usd for e in exposures) / total_mv if total_mv > 0 else 0
         st.markdown(f"""
-        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:8px;padding:16px;">
-            <div style="font-size:11px;color:{theme.text_muted};margin-bottom:12px;">快速统计</div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+        <div style="background:{theme.bg_secondary};border:1px solid {theme.border_light};border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,0.04);">
+            <div style="font-size:10px;color:{theme.text_muted};margin-bottom:14px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;">Portfolio Summary</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid {theme.bg_tertiary};">
                 <span style="color:{theme.text_muted};font-size:12px;">资产规模</span>
-                <span style="color:{theme.text_primary};font-weight:500;">${total_mv/1e9:.1f}B</span>
+                <span style="color:{theme.text_primary};font-weight:600;font-size:14px;">${total_mv/1e9:.1f}B</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid {theme.bg_tertiary};">
+                <span style="color:{theme.text_muted};font-size:12px;">发行人</span>
+                <span style="color:{theme.text_primary};font-weight:600;font-size:14px;">{total_issuers}</span>
             </div>
             <div style="display:flex;justify-content:space-between;">
-                <span style="color:{theme.text_muted};font-size:12px;">发行人</span>
-                <span style="color:{theme.text_primary};font-weight:500;">{total_issuers}</span>
+                <span style="color:{theme.text_muted};font-size:12px;">加权OAS</span>
+                <span style="color:{theme.accent_blue};font-weight:600;font-size:14px;">{avg_oas_sidebar:.0f}bp</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -1461,8 +1787,8 @@ def main():
             st.rerun()
 
         st.markdown(f"""
-        <div style="position:absolute;bottom:20px;left:20px;right:20px;">
-            <div style="color:{theme.text_light};font-size:11px;text-align:center;">v3.0 · 2026 Edition</div>
+        <div style="margin-top:32px;padding-top:16px;border-top:1px solid {theme.border_light};">
+            <div style="color:{theme.text_light};font-size:10px;text-align:center;letter-spacing:0.05em;">v3.1 · Nordic Edition · 2026</div>
         </div>
         """, unsafe_allow_html=True)
 

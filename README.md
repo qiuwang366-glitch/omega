@@ -82,7 +82,7 @@ Project_Omega_2026/
 - `allocation_engine.py`: 多币种 NII 优化逻辑
 - `dashboard.py`: Streamlit 交互式情景分析
 
-### C. Credit Bond Risk Intelligence (`03_Strategy_Lab/credit_bond_risk/`) 🆕
+### C. Credit Bond Risk Intelligence (`03_Strategy_Lab/credit_bond_risk/`)
 **融合四大顶级机构设计理念的信用风险预警平台：**
 
 | Design Source | Concept | Implementation |
@@ -91,12 +91,14 @@ Project_Omega_2026/
 | **JPM Athena** | Signal Library | 风险信号标准化为可组合的 `Signal` 对象 |
 | **LLM Native** | RAG + Summarization | 新闻/公告 → Embedding → 检索 → 摘要 |
 | **ML Ops** | Feature Store | 发行人特征向量化，支持相似性搜索 |
+| **Nordic UI** | Scandinavian Design | 极简北欧风格，light-first，自然色系 |
 
 **Core Capabilities:**
 - **信号系统**: Concentration / Rating / Spread / News Sentiment
 - **AI增强**: Claude LLM 新闻摘要 + 情感分析 + RAG 问答
 - **向量搜索**: text-embedding-3-small 文本向量化
 - **实时监控**: Streamlit Dashboard + Alert Workflow
+- **Nordic UI**: 斯堪的纳维亚极简设计，HTML表格渲染，强制Light模式
 
 ### D. Dashboard (`05_Dashboard_UI/`)
 - Streamlit 入口，支持实时调节：
@@ -158,7 +160,7 @@ streamlit run app.py
 | **Validation** | Pydantic v2 | Type-safe config, data models |
 | **Quant** | QuantLib, SciPy | Bond pricing, optimization |
 | **Data Science** | Pandas, NumPy, Polars | Vectorized operations |
-| **Visualization** | Streamlit, Plotly | Interactive dashboards |
+| **Visualization** | Streamlit, Plotly | Interactive dashboards (Nordic Scandinavian UI) |
 | **LLM Integration** | Claude API (Sonnet/Haiku) | News analysis, RAG |
 | **Vector Embeddings** | OpenAI text-embedding-3-small | Semantic search |
 | **Data Ingestion** | xbbg, office365-rest-python-client | Bloomberg, SharePoint |

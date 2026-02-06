@@ -2,6 +2,7 @@
 Credit Bond Risk - Color Scheme
 
 Institutional-grade color palettes and Plotly layout templates.
+Supports both Premium Dark and Nordic Light (Scandinavian) themes.
 """
 
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ColorScheme:
-    """Premium dark theme color scheme"""
+    """Premium dark theme color scheme (legacy, used by dashboard.py)"""
 
     # Background
     bg_primary: str = "#0d1117"
@@ -96,19 +97,59 @@ class ColorScheme:
         return mapping.get(sector.upper(), scheme.text_secondary)
 
 
+@dataclass
+class NordicColorScheme:
+    """Scandinavian minimal design color palette (primary theme for app.py)"""
+
+    # Background - Warm whites and soft grays
+    bg_primary: str = "#FAFAFA"
+    bg_secondary: str = "#FFFFFF"
+    bg_tertiary: str = "#F5F5F5"
+    bg_sidebar: str = "#F8F9FA"
+
+    # Text - Soft blacks and grays
+    text_primary: str = "#1A1A2E"
+    text_secondary: str = "#4A4A68"
+    text_muted: str = "#8E8EA0"
+    text_light: str = "#B0B0C0"
+
+    # Accent - Nordic nature inspired
+    accent_blue: str = "#5B8DEF"
+    accent_green: str = "#4CAF7C"
+    accent_amber: str = "#E5A94D"
+    accent_coral: str = "#E57373"
+    accent_purple: str = "#9575CD"
+    accent_teal: str = "#4DB6AC"
+
+    # Severity
+    severity_critical: str = "#D84315"
+    severity_warning: str = "#F9A825"
+    severity_info: str = "#5B8DEF"
+
+    # Rating gradient
+    rating_aaa: str = "#2E7D5A"
+    rating_aa: str = "#4CAF7C"
+    rating_a: str = "#81C784"
+    rating_bbb: str = "#E5A94D"
+    rating_bb: str = "#FF8A65"
+    rating_b: str = "#E57373"
+    rating_ccc: str = "#D84315"
+
+    # Sector
+    sector_lgfv: str = "#5B8DEF"
+    sector_soe: str = "#9575CD"
+    sector_financial: str = "#4CAF7C"
+    sector_corp: str = "#E5A94D"
+    sector_supra: str = "#4DB6AC"
+
+    # Border and shadow
+    border_light: str = "#E8E8EC"
+    shadow: str = "0 1px 3px rgba(0,0,0,0.08)"
+
+
 def get_premium_layout(title: str = "", height: int = 400) -> dict:
-    """
-    Get premium Plotly layout template
-
-    Args:
-        title: Chart title
-        height: Chart height in pixels
-
-    Returns:
-        Plotly layout dict
-    """
+    """Get premium Plotly layout template (dark theme)"""
     scheme = ColorScheme()
-
     return {
         "title": {
             "text": title,
@@ -141,5 +182,56 @@ def get_premium_layout(title: str = "", height: int = 400) -> dict:
         "hoverlabel": {
             "bgcolor": scheme.bg_tertiary,
             "font": {"color": scheme.text_primary},
+        },
+    }
+
+
+def get_nordic_layout(title: str = "", height: int = 380) -> dict:
+    """Get Plotly layout with Nordic minimal style (light theme)"""
+    theme = NordicColorScheme()
+    return {
+        "title": {
+            "text": title,
+            "font": {
+                "size": 14,
+                "color": theme.text_primary,
+                "family": "Inter, -apple-system, sans-serif",
+            },
+            "x": 0.02,
+            "xanchor": "left",
+        },
+        "paper_bgcolor": theme.bg_secondary,
+        "plot_bgcolor": theme.bg_secondary,
+        "height": height,
+        "margin": {"l": 50, "r": 20, "t": 45, "b": 40},
+        "font": {
+            "family": "Inter, -apple-system, sans-serif",
+            "color": theme.text_secondary,
+            "size": 11,
+        },
+        "xaxis": {
+            "gridcolor": theme.border_light,
+            "linecolor": theme.border_light,
+            "tickfont": {"color": theme.text_muted, "size": 10},
+            "showgrid": True,
+            "gridwidth": 1,
+        },
+        "yaxis": {
+            "gridcolor": theme.border_light,
+            "linecolor": theme.border_light,
+            "tickfont": {"color": theme.text_muted, "size": 10},
+            "showgrid": True,
+            "gridwidth": 1,
+        },
+        "legend": {
+            "bgcolor": "rgba(255,255,255,0.9)",
+            "font": {"color": theme.text_secondary, "size": 10},
+            "bordercolor": theme.border_light,
+            "borderwidth": 1,
+        },
+        "hoverlabel": {
+            "bgcolor": theme.bg_secondary,
+            "font": {"color": theme.text_primary, "size": 11},
+            "bordercolor": theme.border_light,
         },
     }

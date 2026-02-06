@@ -48,7 +48,7 @@ When working on this codebase, be aware of these key modules:
 | `config` | `03_Strategy_Lab/2026_allocation_plan/` | Pydantic-based config (Currency, Account, FTP) |
 | `analytics` | `03_Strategy_Lab/2026_allocation_plan/` | YieldSurface, FXAnalytics, FTPCalculator |
 | `allocation_engine` | `03_Strategy_Lab/2026_allocation_plan/` | NII optimization, multi-currency allocation |
-| `credit_bond_risk` | `03_Strategy_Lab/credit_bond_risk/` | Credit Intelligence Platform (LLM + Signal + RAG) |
+| `credit_bond_risk` | `03_Strategy_Lab/credit_bond_risk/` | Credit Intelligence Platform (LLM + Signal + RAG, Nordic UI v3.1) |
 
 ## 3.2 🎯 Credit Bond Risk Intelligence Platform
 A next-generation credit monitoring system combining traditional credit analysis with AI-native capabilities:
@@ -58,13 +58,15 @@ A next-generation credit monitoring system combining traditional credit analysis
 | `core/` | config, models, enums | Pydantic v2 Domain Models |
 | `signals/` | base, concentration, spread, rating, news | JPM Athena Signal Library |
 | `intelligence/` | embeddings, rag_engine, news_analyzer | LLM-Native RAG Architecture |
-| `ui/` | dashboard, components | Streamlit Multi-page App |
+| `ui/` | dashboard, components, color_scheme | Streamlit Multi-page App (Nordic + Dark themes) |
+| `.streamlit/` | config.toml | Force light mode + Nordic theme colors |
 
 **Key Design Philosophies:**
 - **BlackRock Aladdin**: Unified Risk View (Multi-source → Single Obligor View → Alert → Action)
 - **JPM Athena**: Signal Library (Standardized, Composable Signal Objects)
 - **LLM Native**: RAG + Summarization (News → Embedding → Retrieval → Summary)
 - **ML Ops**: Feature Store (Obligor Feature Vectors for Similarity & Anomaly Detection)
+- **Nordic UI**: Scandinavian minimal design - warm whites, soft grays, nature-inspired palette
 
 ## 4. 🧠 Cognitive Frameworks (How to Think)
 When analyzing a problem, apply these filters:
